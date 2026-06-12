@@ -1,0 +1,13 @@
+{
+  "name": "Character",
+  "fields": [
+    {
+      "name": "Age",
+      "type": "number"
+    },
+    {
+      "name": "Motivation",
+      "type": "text"
+    }
+  ]
+}

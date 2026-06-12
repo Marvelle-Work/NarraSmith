@@ -1,0 +1,16 @@
+{
+  "name": "narrasmith",
+  "version": "1.0.0",
+  "private": true,
+  "workspaces": [
+    "backend",
+    "packages/*",
+    "apps/*"
+  ],
+  "scripts": {
+    "dev:backend": "npm run dev --workspace=backend",
+    "build:types": "npm run build --workspace=@narrasmith/shared-types",
+    "typecheck": "npm run build:types && npm run typecheck --workspace=backend"
+  },
+  "license": "ISC"
+}
