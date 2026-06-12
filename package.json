@@ -8,6 +8,7 @@
     "apps/*"
   ],
   "scripts": {
+    "dev": "npm run dev --workspace=@narrasmith/web",
     "dev:backend": "npm run dev --workspace=backend",
     "build:types": "npm run build --workspace=@narrasmith/shared-types",
     "typecheck": "npm run build:types && npm run typecheck --workspace=backend"
