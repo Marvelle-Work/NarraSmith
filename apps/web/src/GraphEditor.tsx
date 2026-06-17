@@ -27,6 +27,7 @@ import { resolveRelationshipType, type RelationshipType } from './relationshipSc
 import { DEFAULT_CONCEPT_SCHEMAS, type ConceptSchemaType } from './conceptSchema'
 import { ConceptObjectEditor } from './ConceptObjectEditor'
 import { ConceptSchemaEditorPanel } from './ConceptSchemaEditorPanel'
+import { WorldIndexPanel } from './WorldIndexPanel'
 import {
   loadProjectStore, saveProjectStore, getActiveProject,
   type ProjectStore,
@@ -132,6 +133,7 @@ export function GraphEditor() {
   const [showSchema, setShowSchema]               = useState(false)
   const [showRelSchema, setShowRelSchema]         = useState(false)
   const [showConceptSchema, setShowConceptSchema] = useState(false)
+  const [showIndex, setShowIndex]                 = useState(false)
 
   const [mode, setMode] = useState<UIMode>(
     () => (localStorage.getItem(UI_MODE_KEY) as UIMode | null) ?? 'story',
@@ -402,6 +404,21 @@ export function GraphEditor() {
           )}
 
           <button
+            onClick={() => setShowIndex(s => !s)}
+            title="World Index — browse all entities, connections and concepts"
+            style={{
+              padding: '6px 10px',
+              background: showIndex ? '#18181b' : 'transparent',
+              color: showIndex ? '#fff' : '#71717a',
+              border: '1px solid #e4e4e7',
+              borderRadius: 6, cursor: 'pointer', fontWeight: 600, fontSize: 13,
+              transition: 'all 0.15s',
+            }}
+          >
+            ≡
+          </button>
+
+          <button
             onClick={toggleMode}
             title={story ? 'Switch to System mode for schema controls' : 'Switch to Story mode'}
             style={{
@@ -484,6 +501,14 @@ export function GraphEditor() {
           conceptSchemas={conceptSchema}
           onChange={setConceptSchema}
           onClose={() => setShowConceptSchema(false)}
+        />
+      )}
+      {showIndex && (
+        <WorldIndexPanel
+          nodes={nodes} edges={edges} conceptSchemas={conceptSchema}
+          onSelectNode={id => { setSelectedNodeId(id); setSelectedEdgeId(null) }}
+          onSelectEdge={id => { setSelectedEdgeId(id); setSelectedNodeId(null) }}
+          onClose={() => setShowIndex(false)}
         />
       )}
       {pendingConn && (
