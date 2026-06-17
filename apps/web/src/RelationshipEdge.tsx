@@ -98,6 +98,8 @@ export function RelationshipEdge({
   const hasLabel = typeof label === 'string' && label.trim() !== ''
   const finalStyle = data?.color
     ? { ...style, stroke: data.color as string }
+    : data?.schemaColor
+    ? { ...style, stroke: data.schemaColor as string }
     : style
 
   return (

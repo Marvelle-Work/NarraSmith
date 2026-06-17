@@ -1,23 +1,17 @@
 import { useEffect, useRef, useState } from 'react'
-import { RELATIONSHIP_OPTIONS, type RelationshipType } from './types'
-
-const PRESET_COLORS: Record<RelationshipType, string> = {
-  'Opposes':    '#ef4444',
-  'Allies':     '#22c55e',
-  'Related to': '#94a3b8',
-  'Created by': '#3b82f6',
-  'Influences': '#8b5cf6',
-}
+import type { RelationshipType } from './relationshipSchema'
 
 type Props = {
   sourceLabel: string
   targetLabel: string
-  onSelect: (label: string) => void
+  relationshipTypes: RelationshipType[]
+  onSelect: (label: string, relationshipTypeId?: string) => void
   onCancel: () => void
 }
 
-export function RelationshipModal({ sourceLabel, targetLabel, onSelect, onCancel }: Props) {
+export function RelationshipModal({ sourceLabel, targetLabel, relationshipTypes, onSelect, onCancel }: Props) {
   const [value, setValue] = useState('')
+  const [selectedTypeId, setSelectedTypeId] = useState<string | null>(null)
   const inputRef = useRef<HTMLInputElement>(null)
 
   useEffect(() => {
@@ -29,7 +23,21 @@ export function RelationshipModal({ sourceLabel, targetLabel, onSelect, onCancel
 
   const confirm = () => {
     const trimmed = value.trim()
-    if (trimmed) onSelect(trimmed)
+    if (trimmed) onSelect(trimmed, selectedTypeId ?? undefined)
+  }
+
+  const selectType = (t: RelationshipType) => {
+    setValue(t.name)
+    setSelectedTypeId(t.id)
+  }
+
+  const onType = (v: string) => {
+    setValue(v)
+    // If user manually edits away from the selected type's name, drop the typeId
+    if (selectedTypeId) {
+      const typeName = relationshipTypes.find(t => t.id === selectedTypeId)?.name ?? ''
+      if (v !== typeName) setSelectedTypeId(null)
+    }
   }
 
   return (
@@ -46,7 +54,7 @@ export function RelationshipModal({ sourceLabel, targetLabel, onSelect, onCancel
         background: '#fff',
         borderRadius: 14,
         padding: '28px 24px 20px',
-        width: 340,
+        width: 360,
         boxShadow: '0 24px 64px rgba(0,0,0,0.25)',
       }}>
         <h3 style={{ margin: '0 0 4px', fontSize: 16, fontWeight: 700, color: '#18181b' }}>
@@ -61,7 +69,7 @@ export function RelationshipModal({ sourceLabel, targetLabel, onSelect, onCancel
         <input
           ref={inputRef}
           value={value}
-          onChange={e => setValue(e.target.value)}
+          onChange={e => onType(e.target.value)}
           onKeyDown={e => { if (e.key === 'Enter') confirm() }}
           placeholder="Describe this relationship…"
           style={{
@@ -73,26 +81,32 @@ export function RelationshipModal({ sourceLabel, targetLabel, onSelect, onCancel
           }}
         />
 
-        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginBottom: 18 }}>
-          {RELATIONSHIP_OPTIONS.map(preset => (
-            <button
-              key={preset}
-              onClick={() => setValue(preset)}
-              style={{
-                padding: '4px 10px',
-                borderRadius: 999,
-                border: `1.5px solid ${PRESET_COLORS[preset]}`,
-                background: value === preset ? `${PRESET_COLORS[preset]}18` : 'transparent',
-                color: PRESET_COLORS[preset],
-                fontWeight: 600, fontSize: 12,
-                cursor: 'pointer',
-                transition: 'background 0.1s',
-              }}
-            >
-              {preset}
-            </button>
-          ))}
-        </div>
+        {/* Schema type chips */}
+        {relationshipTypes.length > 0 && (
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginBottom: 18 }}>
+            {relationshipTypes.map(rt => {
+              const active = selectedTypeId === rt.id
+              const color = rt.defaultColor ?? '#a1a1aa'
+              return (
+                <button
+                  key={rt.id}
+                  onClick={() => selectType(rt)}
+                  title={rt.description}
+                  style={{
+                    padding: '4px 10px', borderRadius: 999,
+                    border: `1.5px solid ${color}`,
+                    background: active ? `${color}22` : 'transparent',
+                    color,
+                    fontWeight: 600, fontSize: 12, cursor: 'pointer',
+                    transition: 'background 0.1s',
+                  }}
+                >
+                  {rt.name}
+                </button>
+              )
+            })}
+          </div>
+        )}
 
         <button
           onClick={confirm}

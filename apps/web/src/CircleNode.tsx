@@ -1,6 +1,6 @@
 import { Handle, Position, type NodeProps } from '@xyflow/react'
 import type { GraphNode } from './types'
-import { entityColors } from './types'
+import { entityColors, SIZE_LEVELS } from './types'
 
 function isLight(hex: string): boolean {
   if (hex.length < 7) return true
@@ -19,11 +19,13 @@ export function CircleNode({ data, selected }: NodeProps<GraphNode>) {
   const text   = c ? (isLight(c) ? '#18181b' : '#fff') : ec.text
   const ring   = c ? `${c}44` : ec.ring
 
+  const { diameter, fontSize } = SIZE_LEVELS[((data.sizeLevel ?? 3) - 1)]
+
   return (
     <div
       style={{
-        width: 80,
-        height: 80,
+        width: diameter,
+        height: diameter,
         borderRadius: '50%',
         background: bg,
         border: `2.5px solid ${border}`,
@@ -40,13 +42,13 @@ export function CircleNode({ data, selected }: NodeProps<GraphNode>) {
     >
       <span
         style={{
-          fontSize: 11,
+          fontSize,
           fontWeight: 600,
           color: text,
           textAlign: 'center',
           wordBreak: 'break-word',
           lineHeight: 1.3,
-          maxWidth: 64,
+          maxWidth: diameter - 16,
           overflow: 'hidden',
           display: '-webkit-box',
           WebkitLineClamp: 3,

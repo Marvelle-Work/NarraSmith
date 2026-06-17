@@ -1,14 +1,35 @@
 import type { Node } from '@xyflow/react'
 import type { CSSProperties } from 'react'
 
+export type SizeLevel = 1 | 2 | 3 | 4 | 5
+
+export const SIZE_LEVELS: { level: SizeLevel; label: string; diameter: number; fontSize: number }[] = [
+  { level: 1, label: 'Background', diameter: 52,  fontSize: 10 },
+  { level: 2, label: 'Minor',      diameter: 66,  fontSize: 10 },
+  { level: 3, label: 'Standard',   diameter: 80,  fontSize: 11 },
+  { level: 4, label: 'Important',  diameter: 100, fontSize: 12 },
+  { level: 5, label: 'Core',       diameter: 124, fontSize: 13 },
+]
+
 export type NodeData = {
   label: string
   entityType: string
+  typeId?: string                    // references SchemaType.id
+  fields?: Record<string, string>    // field values keyed by SchemaField.id
   description?: string
   color?: string
+  sizeLevel?: SizeLevel
 }
 
 export type GraphNode = Node<NodeData>
+
+export type EdgeData = {
+  labelT?: number
+  color?: string           // manual override — highest priority
+  schemaColor?: string     // derived from RelationshipType.defaultColor
+  relationshipTypeId?: string
+  description?: string
+}
 
 export const ENTITY_TYPE_PRESETS = ['Character', 'Event', 'Location', 'Object'] as const
 export type EntityType = typeof ENTITY_TYPE_PRESETS[number]
