@@ -21,22 +21,20 @@ import { SchemaEditorPanel } from './SchemaEditorPanel'
 import { RelationshipSchemaEditorPanel } from './RelationshipSchemaEditorPanel'
 import { ColorPicker } from './ColorPicker'
 import { entityColors, edgeStyleForLabel, SIZE_LEVELS, type GraphNode, type NodeData, type SizeLevel } from './types'
+import { resolveFields, type SchemaType, type ResolvedField } from './schema'
+import { resolveRelationshipType, type RelationshipType } from './relationshipSchema'
 import {
-  loadSchemaTypes, saveSchemaTypes, resolveFields,
-  type SchemaType,
-} from './schema'
-import {
-  loadRelationshipTypes, saveRelationshipTypes, resolveRelationshipType,
-  type RelationshipType,
-} from './relationshipSchema'
+  loadProjectStore, saveProjectStore, getActiveProject,
+  type ProjectStore,
+} from './projectStore'
 
 const nodeTypes = { circle: CircleNode }
 const edgeTypes = { relationship: RelationshipEdge }
 
-const GRAPH_KEY   = 'narrasmith-graph'
 const UI_MODE_KEY = 'narrasmith-ui-mode'
-
 type UIMode = 'story' | 'system'
+
+// ── Default demo graph shown to new users ───────────────────────────────
 
 const DEFAULT_GRAPH: { nodes: GraphNode[]; edges: Edge[] } = {
   nodes: [
@@ -51,40 +49,38 @@ const DEFAULT_GRAPH: { nodes: GraphNode[]; edges: Edge[] } = {
   }],
 }
 
-function loadGraph(): { nodes: GraphNode[]; edges: Edge[] } {
-  try {
-    const raw = localStorage.getItem(GRAPH_KEY)
-    if (raw) {
-      const saved = JSON.parse(raw) as { nodes: any[]; edges: any[] }
-      const nodes: GraphNode[] = saved.nodes.map((n: any) => ({
-        ...n,
-        type: 'circle',
-        data: {
-          label:       n.data.label ?? 'Untitled',
-          entityType:  n.data.entityType ?? n.data.category ?? 'Character',
-          typeId:      n.data.typeId,
-          fields:      n.data.fields ?? {},
-          description: n.data.description ?? '',
-          color:       n.data.color,
-          sizeLevel:   (n.data.sizeLevel as SizeLevel | undefined) ?? 3,
-        } satisfies NodeData,
-      }))
-      const edges: Edge[] = saved.edges.map((e: any) => ({
-        ...e,
-        type: 'relationship',
-        data: {
-          labelT:             e.data?.labelT ?? 0.5,
-          color:              e.data?.color,
-          schemaColor:        e.data?.schemaColor,
-          relationshipTypeId: e.data?.relationshipTypeId,
-          description:        e.data?.description,
-        },
-      }))
-      return { nodes, edges }
-    }
-  } catch {}
-  return DEFAULT_GRAPH
+// ── Graph normalization (forward-migrations on raw stored data) ──────────
+
+function normalizeGraph(raw: { nodes: any[]; edges: any[] }): { nodes: GraphNode[]; edges: Edge[] } {
+  if (!raw.nodes || raw.nodes.length === 0) return DEFAULT_GRAPH
+  const nodes: GraphNode[] = raw.nodes.map((n: any) => ({
+    ...n,
+    type: 'circle',
+    data: {
+      label:       n.data.label ?? 'Untitled',
+      entityType:  n.data.entityType ?? n.data.category ?? 'Character',
+      typeId:      n.data.typeId,
+      fields:      n.data.fields ?? {},
+      description: n.data.description ?? '',
+      color:       n.data.color,
+      sizeLevel:   (n.data.sizeLevel as SizeLevel | undefined) ?? 3,
+    } satisfies NodeData,
+  }))
+  const edges: Edge[] = raw.edges.map((e: any) => ({
+    ...e,
+    type: 'relationship',
+    data: {
+      labelT:             e.data?.labelT ?? 0.5,
+      color:              e.data?.color,
+      schemaColor:        e.data?.schemaColor,
+      relationshipTypeId: e.data?.relationshipTypeId,
+      description:        e.data?.description,
+    },
+  }))
+  return { nodes, edges }
 }
+
+// ── Edge style resolution ────────────────────────────────────────────────
 
 function resolveEdgeStyle(
   label: string,
@@ -99,19 +95,34 @@ function resolveEdgeStyle(
   return { style: edgeStyleForLabel(label).style, schemaColor: undefined }
 }
 
+// ── Component ────────────────────────────────────────────────────────────
+
 export function GraphEditor() {
   const { screenToFlowPosition } = useReactFlow()
-  const initial = useMemo(() => loadGraph(), [])
 
+  // ── Project store (Phase 2) — ref so it never drives re-renders ─────────
+  const storeRef = useRef<ProjectStore>(loadProjectStore())
+  const activeProject = getActiveProject(storeRef.current)
+
+  // ── Initialize state from active project ─────────────────────────────
+  const initial = useMemo(() => normalizeGraph(activeProject.graph as any), [])
   const [nodes, setNodes, onNodesChange] = useNodesState<GraphNode>(initial.nodes)
   const [edges, setEdges, onEdgesChange] = useEdgesState(initial.edges)
+  const [schemaTypes, setSchemaTypes]   = useState<SchemaType[]>(() => activeProject.entitySchema)
+  const [relTypes, setRelTypes]         = useState<RelationshipType[]>(() => activeProject.relSchema)
+
+  const schemaRef   = useRef(schemaTypes)
+  const relTypesRef = useRef(relTypes)
+  useEffect(() => { schemaRef.current   = schemaTypes }, [schemaTypes])
+  useEffect(() => { relTypesRef.current = relTypes    }, [relTypes])
+
+  // ── UI state ──────────────────────────────────────────────────────────
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null)
   const [selectedEdgeId, setSelectedEdgeId] = useState<string | null>(null)
   const [pendingConn, setPendingConn]       = useState<Connection | null>(null)
   const [showSchema, setShowSchema]         = useState(false)
   const [showRelSchema, setShowRelSchema]   = useState(false)
 
-  // UI mode — story is default, system reveals schema controls
   const [mode, setMode] = useState<UIMode>(
     () => (localStorage.getItem(UI_MODE_KEY) as UIMode | null) ?? 'story',
   )
@@ -121,26 +132,34 @@ export function GraphEditor() {
   const toggleMode = useCallback(() => {
     setMode(m => {
       if (m === 'story') return 'system'
-      // Switching back to story: close any open schema editors
       setShowSchema(false)
       setShowRelSchema(false)
       return 'story'
     })
   }, [])
 
-  // Entity schema
-  const [schemaTypes, setSchemaTypes] = useState<SchemaType[]>(() => loadSchemaTypes())
-  const schemaRef = useRef(schemaTypes)
-  useEffect(() => { schemaRef.current = schemaTypes }, [schemaTypes])
-  useEffect(() => { saveSchemaTypes(schemaTypes) }, [schemaTypes])
+  // ── Single consolidated persistence (Phase 2) ─────────────────────────
+  // All project data — graph, entity schema, relationship schema — is written
+  // to narrasmith-projects in one effect so the store is always consistent.
+  useEffect(() => {
+    const current = storeRef.current
+    const next: ProjectStore = {
+      ...current,
+      projects: {
+        ...current.projects,
+        [current.activeProjectId]: {
+          ...getActiveProject(current),
+          graph: { nodes: nodes as any, edges: edges as any },
+          entitySchema: schemaTypes,
+          relSchema: relTypes,
+        },
+      },
+    }
+    storeRef.current = next
+    saveProjectStore(next)
+  }, [nodes, edges, schemaTypes, relTypes])
 
-  // Relationship schema
-  const [relTypes, setRelTypes] = useState<RelationshipType[]>(() => loadRelationshipTypes())
-  const relTypesRef = useRef(relTypes)
-  useEffect(() => { relTypesRef.current = relTypes }, [relTypes])
-  useEffect(() => { saveRelationshipTypes(relTypes) }, [relTypes])
-
-  // Re-sync schemaColor when relationship schema changes
+  // ── Re-sync schemaColor when relationship schema changes ──────────────
   useEffect(() => {
     setEdges(eds => eds.map(e => {
       const typeId = e.data?.relationshipTypeId as string | undefined
@@ -153,12 +172,7 @@ export function GraphEditor() {
     }))
   }, [relTypes]) // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Graph persistence
-  useEffect(() => {
-    localStorage.setItem(GRAPH_KEY, JSON.stringify({ nodes, edges }))
-  }, [nodes, edges])
-
-  // ── Derived selections ──────────────────────────────────────────────────
+  // ── Derived selections ────────────────────────────────────────────────
   const selectedNode = useMemo(
     () => selectedNodeId ? nodes.find(n => n.id === selectedNodeId) ?? null : null,
     [nodes, selectedNodeId],
@@ -183,7 +197,7 @@ export function GraphEditor() {
     [selectedNode, schemaTypes],
   )
 
-  // ── Entity creation ─────────────────────────────────────────────────────
+  // ── Entity creation ───────────────────────────────────────────────────
   const createEntityAt = useCallback((position: { x: number; y: number }) => {
     const id = `node-${Date.now()}`
     const defaultSchema = schemaRef.current.find(t => t.name === 'Character')
@@ -219,7 +233,7 @@ export function GraphEditor() {
     return () => document.removeEventListener('keydown', onKey)
   }, [createEntityAtCenter, pendingConn, showSchema, showRelSchema])
 
-  // ── Connections ─────────────────────────────────────────────────────────
+  // ── Connections ───────────────────────────────────────────────────────
   const onConnect = useCallback((conn: Connection) => setPendingConn(conn), [])
 
   const confirmRelationship = useCallback((label: string, relationshipTypeId?: string) => {
@@ -228,15 +242,13 @@ export function GraphEditor() {
     setEdges(eds => addEdge({
       ...pendingConn,
       id: `edge-${Date.now()}`,
-      label,
-      type: 'relationship',
-      style,
+      label, type: 'relationship', style,
       data: { labelT: 0.5, relationshipTypeId, schemaColor },
     }, eds))
     setPendingConn(null)
   }, [pendingConn, setEdges])
 
-  // ── Click handlers ──────────────────────────────────────────────────────
+  // ── Click handlers ────────────────────────────────────────────────────
   const onNodeClick: NodeMouseHandler<GraphNode> = useCallback((_e, node) => {
     setSelectedNodeId(node.id)
     setSelectedEdgeId(null)
@@ -254,7 +266,7 @@ export function GraphEditor() {
     setSelectedEdgeId(null)
   }, [])
 
-  // ── Data updaters ───────────────────────────────────────────────────────
+  // ── Data updaters ─────────────────────────────────────────────────────
   const updateNode = useCallback((updates: Partial<NodeData>) => {
     if (!selectedNodeId) return
     setNodes(nds => nds.map(n =>
@@ -287,12 +299,10 @@ export function GraphEditor() {
       const resolved = resolveRelationshipType(typeId, relTypesRef.current)
       const schemaColor = resolved?.defaultColor
       const manualColor = e.data?.color as string | undefined
-      const style = resolveEdgeStyle(typeof e.label === 'string' ? e.label : '', typeId, relTypesRef.current, manualColor)
-      const label = (typeof e.label !== 'string' || e.label.trim() === '')
-        ? (resolved?.name ?? e.label)
-        : e.label
+      const styleResult = resolveEdgeStyle(typeof e.label === 'string' ? e.label : '', typeId, relTypesRef.current, manualColor)
+      const label = (typeof e.label !== 'string' || e.label.trim() === '') ? (resolved?.name ?? e.label) : e.label
       return {
-        ...e, label, style: style.style,
+        ...e, label, style: styleResult.style,
         data: { ...e.data, relationshipTypeId: typeId, schemaColor: manualColor ? undefined : schemaColor },
       }
     }))
@@ -320,37 +330,30 @@ export function GraphEditor() {
   const pendingSource = pendingConn ? nodes.find(n => n.id === pendingConn.source)?.data.label ?? '' : ''
   const pendingTarget = pendingConn ? nodes.find(n => n.id === pendingConn.target)?.data.label ?? '' : ''
 
-  // ── Render ──────────────────────────────────────────────────────────────
+  // ── Render ────────────────────────────────────────────────────────────
   return (
     <div style={{ width: '100vw', height: '100vh', display: 'flex', fontFamily: 'system-ui, sans-serif' }}>
 
       {/* Canvas */}
       <div style={{ flex: 1, position: 'relative' }} onDoubleClick={onCanvasDoubleClick}>
         <div style={{ position: 'absolute', top: 12, left: 12, zIndex: 10, display: 'flex', gap: 8, alignItems: 'center' }}>
-          <button onClick={createEntityAtCenter} style={toolbarBtn}>+ New Entity</button>
+          {/* Phase 1: "New Entity" → "New" in story mode */}
+          <button onClick={createEntityAtCenter} style={toolbarBtn}>
+            {story ? '+ New' : '+ New Entity'}
+          </button>
 
-          {/* Schema buttons — system mode only */}
+          {/* Schema buttons visible in system mode only */}
           {!story && (
             <>
               <button
                 onClick={() => { setShowSchema(s => !s); setShowRelSchema(false) }}
-                style={{
-                  ...toolbarBtn,
-                  background: showSchema ? '#6366f1' : '#fafafa',
-                  color: showSchema ? '#fff' : '#18181b',
-                  border: '1px solid #e4e4e7',
-                }}
+                style={{ ...toolbarBtn, background: showSchema ? '#6366f1' : '#fafafa', color: showSchema ? '#fff' : '#18181b', border: '1px solid #e4e4e7' }}
               >
                 Entity Schema
               </button>
               <button
                 onClick={() => { setShowRelSchema(s => !s); setShowSchema(false) }}
-                style={{
-                  ...toolbarBtn,
-                  background: showRelSchema ? '#0ea5e9' : '#fafafa',
-                  color: showRelSchema ? '#fff' : '#18181b',
-                  border: '1px solid #e4e4e7',
-                }}
+                style={{ ...toolbarBtn, background: showRelSchema ? '#0ea5e9' : '#fafafa', color: showRelSchema ? '#fff' : '#18181b', border: '1px solid #e4e4e7' }}
               >
                 Rel. Schema
               </button>
@@ -359,7 +362,6 @@ export function GraphEditor() {
 
           <span style={{ fontSize: 12, color: '#71717a' }}>double-click · Enter</span>
 
-          {/* Mode toggle — always visible, unobtrusive in story mode */}
           <button
             onClick={toggleMode}
             title={story ? 'Switch to System mode for schema controls' : 'Switch to Story mode'}
@@ -368,8 +370,7 @@ export function GraphEditor() {
               background: story ? 'transparent' : '#18181b',
               color: story ? '#c4c4c7' : '#fff',
               border: `1px solid ${story ? '#e4e4e7' : '#18181b'}`,
-              borderRadius: 6, cursor: 'pointer',
-              fontWeight: 600, fontSize: 11,
+              borderRadius: 6, cursor: 'pointer', fontWeight: 600, fontSize: 11,
               transition: 'all 0.15s',
             }}
           >
@@ -378,22 +379,15 @@ export function GraphEditor() {
         </div>
 
         <ReactFlow
-          nodes={nodes}
-          edges={edges}
-          nodeTypes={nodeTypes}
-          edgeTypes={edgeTypes}
-          onNodesChange={onNodesChange}
-          onEdgesChange={onEdgesChange}
+          nodes={nodes} edges={edges}
+          nodeTypes={nodeTypes} edgeTypes={edgeTypes}
+          onNodesChange={onNodesChange} onEdgesChange={onEdgesChange}
           onConnect={onConnect}
-          onNodeClick={onNodeClick}
-          onEdgeClick={onEdgeClick}
-          onPaneClick={onPaneClick}
+          onNodeClick={onNodeClick} onEdgeClick={onEdgeClick} onPaneClick={onPaneClick}
           zoomOnDoubleClick={false}
           fitView
         >
-          <Background />
-          <Controls />
-          <MiniMap />
+          <Background /><Controls /><MiniMap />
         </ReactFlow>
       </div>
 
@@ -405,99 +399,87 @@ export function GraphEditor() {
           display: 'flex', flexDirection: 'column', gap: 18, overflowY: 'auto',
           flexShrink: 0,
         }}>
-
-          {/* ── Entity panel ── */}
-          {selectedNode && (
-            story
-              ? <StoryEntityPanel
-                  node={selectedNode}
-                  schemaTypes={schemaTypes}
-                  resolvedFields={resolvedFields}
-                  relationships={selectedRelationships}
-                  onUpdate={updateNode}
-                />
-              : <SystemEntityPanel
-                  node={selectedNode}
-                  schemaTypes={schemaTypes}
-                  resolvedFields={resolvedFields}
-                  relationships={selectedRelationships}
-                  onUpdate={updateNode}
-                />
+          {selectedNode && (story
+            ? <StoryEntityPanel
+                node={selectedNode} schemaTypes={schemaTypes}
+                resolvedFields={resolvedFields} relationships={selectedRelationships}
+                onUpdate={updateNode}
+              />
+            : <SystemEntityPanel
+                node={selectedNode} schemaTypes={schemaTypes}
+                resolvedFields={resolvedFields} relationships={selectedRelationships}
+                onUpdate={updateNode}
+              />
           )}
-
-          {/* ── Edge panel ── */}
-          {selectedEdge && (
-            story
-              ? <StoryEdgePanel
-                  edge={selectedEdge}
-                  nodes={nodes}
-                  onUpdateLabel={updateEdgeLabel}
-                  onUpdateDescription={updateEdgeDescription}
-                  onUpdateColor={updateEdgeColor}
-                />
-              : <SystemEdgePanel
-                  edge={selectedEdge}
-                  nodes={nodes}
-                  relTypes={relTypes}
-                  onUpdateLabel={updateEdgeLabel}
-                  onUpdateDescription={updateEdgeDescription}
-                  onUpdateColor={updateEdgeColor}
-                  onUpdateTypeId={updateEdgeTypeId}
-                  onClearTypeId={clearEdgeTypeId}
-                />
+          {selectedEdge && (story
+            ? <StoryEdgePanel
+                edge={selectedEdge} nodes={nodes}
+                onUpdateLabel={updateEdgeLabel}
+                onUpdateDescription={updateEdgeDescription}
+                onUpdateColor={updateEdgeColor}
+              />
+            : <SystemEdgePanel
+                edge={selectedEdge} nodes={nodes} relTypes={relTypes}
+                onUpdateLabel={updateEdgeLabel}
+                onUpdateDescription={updateEdgeDescription}
+                onUpdateColor={updateEdgeColor}
+                onUpdateTypeId={updateEdgeTypeId}
+                onClearTypeId={clearEdgeTypeId}
+              />
           )}
         </aside>
       )}
 
-      {/* Schema modals — system mode only */}
       {showSchema && (
-        <SchemaEditorPanel
-          schemaTypes={schemaTypes}
-          onChange={setSchemaTypes}
-          onClose={() => setShowSchema(false)}
-        />
+        <SchemaEditorPanel schemaTypes={schemaTypes} onChange={setSchemaTypes} onClose={() => setShowSchema(false)} />
       )}
       {showRelSchema && (
-        <RelationshipSchemaEditorPanel
-          relationshipTypes={relTypes}
-          onChange={setRelTypes}
-          onClose={() => setShowRelSchema(false)}
-        />
+        <RelationshipSchemaEditorPanel relationshipTypes={relTypes} onChange={setRelTypes} onClose={() => setShowRelSchema(false)} />
       )}
-
-      {/* Relationship creation modal */}
       {pendingConn && (
         <RelationshipModal
-          sourceLabel={pendingSource}
-          targetLabel={pendingTarget}
-          relationshipTypes={relTypes}
-          onSelect={confirmRelationship}
-          onCancel={() => setPendingConn(null)}
+          sourceLabel={pendingSource} targetLabel={pendingTarget}
+          relationshipTypes={relTypes} mode={mode}
+          onSelect={confirmRelationship} onCancel={() => setPendingConn(null)}
         />
       )}
     </div>
   )
 }
 
-// ── Story-mode entity panel ─────────────────────────────────────────────
+// ── Panel prop types ──────────────────────────────────────────────────────
+
+type RelationshipList = { outgoing: { label: string; peer: string }[]; incoming: { label: string; peer: string }[] }
 
 type EntityPanelProps = {
-  node: ReturnType<typeof import('./types').entityColors> extends infer _ ? import('./types').GraphNode : never
-  schemaTypes: import('./schema').SchemaType[]
-  resolvedFields: import('./schema').ResolvedField[]
-  relationships: { outgoing: { label: string; peer: string }[]; incoming: { label: string; peer: string }[] }
-  onUpdate: (u: Partial<import('./types').NodeData>) => void
+  node: GraphNode
+  schemaTypes: SchemaType[]
+  resolvedFields: ResolvedField[]
+  relationships: RelationshipList
+  onUpdate: (u: Partial<NodeData>) => void
 }
+
+type StoryEdgePanelProps = {
+  edge: Edge
+  nodes: GraphNode[]
+  onUpdateLabel: (l: string) => void
+  onUpdateDescription: (d: string) => void
+  onUpdateColor: (c: string) => void
+}
+
+type SystemEdgePanelProps = StoryEdgePanelProps & {
+  relTypes: RelationshipType[]
+  onUpdateTypeId: (id: string) => void
+  onClearTypeId: () => void
+}
+
+// ── Story-mode entity panel ───────────────────────────────────────────────
 
 function StoryEntityPanel({ node, schemaTypes, resolvedFields, relationships, onUpdate }: EntityPanelProps) {
   return (
     <>
       <PanelField label="Name">
-        <input
-          value={node.data.label}
-          onChange={e => onUpdate({ label: e.target.value })}
-          style={inputStyle}
-        />
+        <input value={node.data.label} onChange={e => onUpdate({ label: e.target.value })} style={inputStyle} />
       </PanelField>
 
       <PanelField label="Role">
@@ -515,43 +497,32 @@ function StoryEntityPanel({ node, schemaTypes, resolvedFields, relationships, on
             const c = entityColors(st.name)
             const active = node.data.typeId === st.id
             return (
-              <button
-                key={st.id}
-                onClick={() => onUpdate({ entityType: st.name, typeId: st.id })}
-                style={{
-                  padding: '3px 9px', borderRadius: 999,
-                  border: `1.5px solid ${c.border}`,
-                  background: active ? c.bg : 'transparent',
-                  color: c.text,
-                  fontWeight: 600, fontSize: 11, cursor: 'pointer',
-                  opacity: active ? 1 : 0.5,
-                  transition: 'opacity 0.1s, background 0.1s',
-                }}
-              >
-                {st.name}
-              </button>
+              <button key={st.id} onClick={() => onUpdate({ entityType: st.name, typeId: st.id })} style={{
+                padding: '3px 9px', borderRadius: 999,
+                border: `1.5px solid ${c.border}`,
+                background: active ? c.bg : 'transparent', color: c.text,
+                fontWeight: 600, fontSize: 11, cursor: 'pointer',
+                opacity: active ? 1 : 0.5, transition: 'opacity 0.1s, background 0.1s',
+              }}>{st.name}</button>
             )
           })}
         </div>
       </PanelField>
 
-      <PanelField label="Emphasis">
+      {/* Phase 1: "Importance" in story mode instead of "Emphasis" */}
+      <PanelField label="Importance">
         <EmphasisPicker value={node.data.sizeLevel ?? 3} onChange={v => onUpdate({ sizeLevel: v })} />
       </PanelField>
 
       <PanelField label="Color">
-        <ColorPicker
-          value={node.data.color}
-          onChange={color => onUpdate({ color: color || undefined })}
-        />
+        <ColorPicker value={node.data.color} onChange={color => onUpdate({ color: color || undefined })} />
       </PanelField>
 
       <PanelField label="Description">
         <textarea
           value={node.data.description ?? ''}
           onChange={e => onUpdate({ description: e.target.value })}
-          rows={4}
-          placeholder="Who or what is this? What role do they play?"
+          rows={4} placeholder="Who or what is this? What role do they play?"
           style={{ ...inputStyle, resize: 'vertical' }}
         />
       </PanelField>
@@ -583,7 +554,7 @@ function StoryEntityPanel({ node, schemaTypes, resolvedFields, relationships, on
   )
 }
 
-// ── System-mode entity panel ────────────────────────────────────────────
+// ── System-mode entity panel ──────────────────────────────────────────────
 
 function SystemEntityPanel({ node, schemaTypes, resolvedFields, relationships, onUpdate }: EntityPanelProps) {
   return (
@@ -591,11 +562,7 @@ function SystemEntityPanel({ node, schemaTypes, resolvedFields, relationships, o
       <h2 style={panelHeading}>Entity</h2>
 
       <PanelField label="Name">
-        <input
-          value={node.data.label}
-          onChange={e => onUpdate({ label: e.target.value })}
-          style={inputStyle}
-        />
+        <input value={node.data.label} onChange={e => onUpdate({ label: e.target.value })} style={inputStyle} />
       </PanelField>
 
       <PanelField label="Type">
@@ -613,31 +580,20 @@ function SystemEntityPanel({ node, schemaTypes, resolvedFields, relationships, o
             const c = entityColors(st.name)
             const active = node.data.typeId === st.id
             return (
-              <button
-                key={st.id}
-                onClick={() => onUpdate({ entityType: st.name, typeId: st.id })}
-                style={{
-                  padding: '3px 9px', borderRadius: 999,
-                  border: `1.5px solid ${c.border}`,
-                  background: active ? c.bg : 'transparent',
-                  color: c.text,
-                  fontWeight: 600, fontSize: 11, cursor: 'pointer',
-                  opacity: active ? 1 : 0.5,
-                  transition: 'opacity 0.1s, background 0.1s',
-                }}
-              >
-                {st.name}
-              </button>
+              <button key={st.id} onClick={() => onUpdate({ entityType: st.name, typeId: st.id })} style={{
+                padding: '3px 9px', borderRadius: 999,
+                border: `1.5px solid ${c.border}`,
+                background: active ? c.bg : 'transparent', color: c.text,
+                fontWeight: 600, fontSize: 11, cursor: 'pointer',
+                opacity: active ? 1 : 0.5, transition: 'opacity 0.1s, background 0.1s',
+              }}>{st.name}</button>
             )
           })}
         </div>
       </PanelField>
 
       <PanelField label="Color">
-        <ColorPicker
-          value={node.data.color}
-          onChange={color => onUpdate({ color: color || undefined })}
-        />
+        <ColorPicker value={node.data.color} onChange={color => onUpdate({ color: color || undefined })} />
       </PanelField>
 
       <PanelField label="Emphasis">
@@ -687,15 +643,7 @@ function SystemEntityPanel({ node, schemaTypes, resolvedFields, relationships, o
   )
 }
 
-// ── Story-mode edge panel ───────────────────────────────────────────────
-
-type StoryEdgePanelProps = {
-  edge: Edge
-  nodes: import('./types').GraphNode[]
-  onUpdateLabel: (l: string) => void
-  onUpdateDescription: (d: string) => void
-  onUpdateColor: (c: string) => void
-}
+// ── Story-mode edge panel ─────────────────────────────────────────────────
 
 function StoryEdgePanel({ edge, nodes, onUpdateLabel, onUpdateDescription, onUpdateColor }: StoryEdgePanelProps) {
   const sourceName = nodes.find(n => n.id === edge.source)?.data.label ?? edge.source
@@ -708,7 +656,6 @@ function StoryEdgePanel({ edge, nodes, onUpdateLabel, onUpdateDescription, onUpd
         <span style={{ color: '#a1a1aa' }}>→</span>
         <span style={{ fontWeight: 600, color: '#18181b' }}>{targetName}</span>
       </div>
-
       <PanelField label="What connects them?">
         <input
           autoFocus
@@ -718,46 +665,28 @@ function StoryEdgePanel({ edge, nodes, onUpdateLabel, onUpdateDescription, onUpd
           style={inputStyle}
         />
       </PanelField>
-
       <PanelField label="Notes">
         <textarea
           value={(edge.data?.description as string | undefined) ?? ''}
           onChange={e => onUpdateDescription(e.target.value)}
-          rows={3}
-          placeholder="Any context about this connection…"
+          rows={3} placeholder="Any context about this connection…"
           style={{ ...inputStyle, resize: 'vertical' }}
         />
       </PanelField>
-
       <PanelField label="Color">
-        <ColorPicker
-          value={edge.data?.color as string | undefined}
-          onChange={onUpdateColor}
-        />
+        <ColorPicker value={edge.data?.color as string | undefined} onChange={onUpdateColor} />
       </PanelField>
     </>
   )
 }
 
-// ── System-mode edge panel ──────────────────────────────────────────────
-
-type SystemEdgePanelProps = {
-  edge: Edge
-  nodes: import('./types').GraphNode[]
-  relTypes: RelationshipType[]
-  onUpdateLabel: (l: string) => void
-  onUpdateDescription: (d: string) => void
-  onUpdateColor: (c: string) => void
-  onUpdateTypeId: (id: string) => void
-  onClearTypeId: () => void
-}
+// ── System-mode edge panel ────────────────────────────────────────────────
 
 function SystemEdgePanel({ edge, nodes, relTypes, onUpdateLabel, onUpdateDescription, onUpdateColor, onUpdateTypeId, onClearTypeId }: SystemEdgePanelProps) {
   const edgeTypeId = edge.data?.relationshipTypeId as string | undefined
   const resolvedType = edgeTypeId ? resolveRelationshipType(edgeTypeId, relTypes) : null
   const sourceName = nodes.find(n => n.id === edge.source)?.data.label ?? edge.source
   const targetName = nodes.find(n => n.id === edge.target)?.data.label ?? edge.target
-
   return (
     <>
       <h2 style={panelHeading}>Relationship</h2>
@@ -766,7 +695,6 @@ function SystemEdgePanel({ edge, nodes, relTypes, onUpdateLabel, onUpdateDescrip
         <span style={{ color: '#a1a1aa' }}>→</span>
         <span style={{ fontWeight: 600, color: '#18181b' }}>{targetName}</span>
       </div>
-
       <PanelField label="Label">
         <input
           autoFocus
@@ -776,40 +704,26 @@ function SystemEdgePanel({ edge, nodes, relTypes, onUpdateLabel, onUpdateDescrip
           style={inputStyle}
         />
       </PanelField>
-
       <PanelField label="Type">
         <div style={{ display: 'flex', flexWrap: 'wrap', gap: 5 }}>
           <button
             onClick={onClearTypeId}
             style={{
-              padding: '3px 9px', borderRadius: 999,
-              border: '1.5px solid #d4d4d8',
+              padding: '3px 9px', borderRadius: 999, border: '1.5px solid #d4d4d8',
               background: !edgeTypeId ? '#f4f4f5' : 'transparent',
-              color: '#71717a',
-              fontWeight: 600, fontSize: 11, cursor: 'pointer',
+              color: '#71717a', fontWeight: 600, fontSize: 11, cursor: 'pointer',
             }}
-          >
-            Custom
-          </button>
+          >Custom</button>
           {relTypes.map(rt => {
             const active = edgeTypeId === rt.id
             const color = resolveRelationshipType(rt.id, relTypes)?.defaultColor ?? '#a1a1aa'
             return (
-              <button
-                key={rt.id}
-                onClick={() => onUpdateTypeId(rt.id)}
-                title={rt.description}
-                style={{
-                  padding: '3px 9px', borderRadius: 999,
-                  border: `1.5px solid ${color}`,
-                  background: active ? `${color}22` : 'transparent',
-                  color,
-                  fontWeight: 600, fontSize: 11, cursor: 'pointer',
-                  transition: 'background 0.1s',
-                }}
-              >
-                {rt.name}
-              </button>
+              <button key={rt.id} onClick={() => onUpdateTypeId(rt.id)} title={rt.description} style={{
+                padding: '3px 9px', borderRadius: 999,
+                border: `1.5px solid ${color}`,
+                background: active ? `${color}22` : 'transparent', color,
+                fontWeight: 600, fontSize: 11, cursor: 'pointer', transition: 'background 0.1s',
+              }}>{rt.name}</button>
             )
           })}
         </div>
@@ -817,7 +731,6 @@ function SystemEdgePanel({ edge, nodes, relTypes, onUpdateLabel, onUpdateDescrip
           <span style={{ fontSize: 12, color: '#a1a1aa', marginTop: 4 }}>{resolvedType.description}</span>
         )}
       </PanelField>
-
       <PanelField label="Notes">
         <textarea
           value={(edge.data?.description as string | undefined) ?? ''}
@@ -826,12 +739,8 @@ function SystemEdgePanel({ edge, nodes, relTypes, onUpdateLabel, onUpdateDescrip
           style={{ ...inputStyle, resize: 'vertical' }}
         />
       </PanelField>
-
       <PanelField label="Color">
-        <ColorPicker
-          value={edge.data?.color as string | undefined}
-          onChange={onUpdateColor}
-        />
+        <ColorPicker value={edge.data?.color as string | undefined} onChange={onUpdateColor} />
         {!edge.data?.color && resolvedType?.defaultColor && (
           <span style={{ fontSize: 11, color: '#a1a1aa', marginTop: 2 }}>
             Using schema color — set a color above to override
@@ -842,7 +751,7 @@ function SystemEdgePanel({ edge, nodes, relTypes, onUpdateLabel, onUpdateDescrip
   )
 }
 
-// ── Shared sub-components ───────────────────────────────────────────────
+// ── Shared sub-components ─────────────────────────────────────────────────
 
 function EmphasisPicker({ value, onChange }: { value: SizeLevel; onChange: (v: SizeLevel) => void }) {
   return (
@@ -850,27 +759,21 @@ function EmphasisPicker({ value, onChange }: { value: SizeLevel; onChange: (v: S
       {SIZE_LEVELS.map(({ level, label }) => {
         const active = value === level
         return (
-          <button
-            key={level}
-            onClick={() => onChange(level)}
-            style={{
-              padding: '3px 8px', borderRadius: 999,
-              border: `1.5px solid ${active ? '#18181b' : '#d4d4d8'}`,
-              background: active ? '#18181b' : 'transparent',
-              color: active ? '#fff' : '#52525b',
-              fontWeight: 600, fontSize: 11, cursor: 'pointer',
-              transition: 'background 0.1s, color 0.1s, border-color 0.1s',
-            }}
-          >
-            {label}
-          </button>
+          <button key={level} onClick={() => onChange(level)} style={{
+            padding: '3px 8px', borderRadius: 999,
+            border: `1.5px solid ${active ? '#18181b' : '#d4d4d8'}`,
+            background: active ? '#18181b' : 'transparent',
+            color: active ? '#fff' : '#52525b',
+            fontWeight: 600, fontSize: 11, cursor: 'pointer',
+            transition: 'background 0.1s, color 0.1s, border-color 0.1s',
+          }}>{label}</button>
         )
       })}
     </div>
   )
 }
 
-function ConnectionsList({ relationships }: { relationships: { outgoing: { label: string; peer: string }[]; incoming: { label: string; peer: string }[] } }) {
+function ConnectionsList({ relationships }: { relationships: RelationshipList }) {
   const { outgoing, incoming } = relationships
   if (outgoing.length === 0 && incoming.length === 0)
     return <span style={{ fontSize: 13, color: '#a1a1aa' }}>None yet</span>
@@ -897,8 +800,8 @@ function RelChip({ direction, peer, label }: { direction: 'in' | 'out'; peer: st
   return (
     <div style={{
       display: 'flex', alignItems: 'center', gap: 6,
-      padding: '5px 8px',
-      background: '#fff', border: '1px solid #e4e4e7', borderRadius: 6,
+      padding: '5px 8px', background: '#fff',
+      border: '1px solid #e4e4e7', borderRadius: 6,
       fontSize: 13, color: '#18181b',
     }}>
       <span style={{ fontWeight: 700, color: direction === 'out' ? '#6366f1' : '#f59e0b' }}>
@@ -910,7 +813,7 @@ function RelChip({ direction, peer, label }: { direction: 'in' | 'out'; peer: st
   )
 }
 
-// ── Styles ──────────────────────────────────────────────────────────────
+// ── Styles ────────────────────────────────────────────────────────────────
 
 const panelHeading: React.CSSProperties = {
   margin: 0, fontSize: 15, fontWeight: 700, color: '#18181b',

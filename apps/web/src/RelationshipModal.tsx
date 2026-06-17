@@ -5,14 +5,16 @@ type Props = {
   sourceLabel: string
   targetLabel: string
   relationshipTypes: RelationshipType[]
+  mode?: 'story' | 'system'
   onSelect: (label: string, relationshipTypeId?: string) => void
   onCancel: () => void
 }
 
-export function RelationshipModal({ sourceLabel, targetLabel, relationshipTypes, onSelect, onCancel }: Props) {
+export function RelationshipModal({ sourceLabel, targetLabel, relationshipTypes, mode = 'story', onSelect, onCancel }: Props) {
   const [value, setValue] = useState('')
   const [selectedTypeId, setSelectedTypeId] = useState<string | null>(null)
   const inputRef = useRef<HTMLInputElement>(null)
+  const story = mode === 'story'
 
   useEffect(() => {
     inputRef.current?.focus()
@@ -33,7 +35,6 @@ export function RelationshipModal({ sourceLabel, targetLabel, relationshipTypes,
 
   const onType = (v: string) => {
     setValue(v)
-    // If user manually edits away from the selected type's name, drop the typeId
     if (selectedTypeId) {
       const typeName = relationshipTypes.find(t => t.id === selectedTypeId)?.name ?? ''
       if (v !== typeName) setSelectedTypeId(null)
@@ -58,7 +59,7 @@ export function RelationshipModal({ sourceLabel, targetLabel, relationshipTypes,
         boxShadow: '0 24px 64px rgba(0,0,0,0.25)',
       }}>
         <h3 style={{ margin: '0 0 4px', fontSize: 16, fontWeight: 700, color: '#18181b' }}>
-          What is this relationship?
+          {story ? 'How are they connected?' : 'What is this relationship?'}
         </h3>
         <p style={{ margin: '0 0 18px', fontSize: 13, color: '#71717a' }}>
           <strong style={{ color: '#18181b' }}>{sourceLabel}</strong>
@@ -71,7 +72,7 @@ export function RelationshipModal({ sourceLabel, targetLabel, relationshipTypes,
           value={value}
           onChange={e => onType(e.target.value)}
           onKeyDown={e => { if (e.key === 'Enter') confirm() }}
-          placeholder="Describe this relationship…"
+          placeholder={story ? 'Describe how they\'re connected…' : 'Describe this relationship…'}
           style={{
             width: '100%', padding: '9px 12px',
             border: '1.5px solid #d4d4d8', borderRadius: 8,
@@ -81,31 +82,37 @@ export function RelationshipModal({ sourceLabel, targetLabel, relationshipTypes,
           }}
         />
 
-        {/* Schema type chips */}
         {relationshipTypes.length > 0 && (
-          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginBottom: 18 }}>
-            {relationshipTypes.map(rt => {
-              const active = selectedTypeId === rt.id
-              const color = rt.defaultColor ?? '#a1a1aa'
-              return (
-                <button
-                  key={rt.id}
-                  onClick={() => selectType(rt)}
-                  title={rt.description}
-                  style={{
-                    padding: '4px 10px', borderRadius: 999,
-                    border: `1.5px solid ${color}`,
-                    background: active ? `${color}22` : 'transparent',
-                    color,
-                    fontWeight: 600, fontSize: 12, cursor: 'pointer',
-                    transition: 'background 0.1s',
-                  }}
-                >
-                  {rt.name}
-                </button>
-              )
-            })}
-          </div>
+          <>
+            {story && (
+              <p style={{ margin: '0 0 8px', fontSize: 11, fontWeight: 700, color: '#a1a1aa', textTransform: 'uppercase', letterSpacing: 0.5 }}>
+                Suggestions
+              </p>
+            )}
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginBottom: 18 }}>
+              {relationshipTypes.map(rt => {
+                const active = selectedTypeId === rt.id
+                const color = rt.defaultColor ?? '#a1a1aa'
+                return (
+                  <button
+                    key={rt.id}
+                    onClick={() => selectType(rt)}
+                    title={rt.description}
+                    style={{
+                      padding: '4px 10px', borderRadius: 999,
+                      border: `1.5px solid ${color}`,
+                      background: active ? `${color}22` : 'transparent',
+                      color,
+                      fontWeight: 600, fontSize: 12, cursor: 'pointer',
+                      transition: 'background 0.1s',
+                    }}
+                  >
+                    {rt.name}
+                  </button>
+                )
+              })}
+            </div>
+          </>
         )}
 
         <button
@@ -121,7 +128,7 @@ export function RelationshipModal({ sourceLabel, targetLabel, relationshipTypes,
             transition: 'background 0.15s',
           }}
         >
-          Add Relationship
+          {story ? 'Connect' : 'Add Relationship'}
         </button>
 
         <button
