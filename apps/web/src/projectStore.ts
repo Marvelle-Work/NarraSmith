@@ -1,5 +1,6 @@
 import { DEFAULT_SCHEMA_TYPES, type SchemaType } from './schema'
 import { DEFAULT_RELATIONSHIP_TYPES, type RelationshipType } from './relationshipSchema'
+import { DEFAULT_CONCEPT_SCHEMAS, type ConceptSchemaType } from './conceptSchema'
 
 // ── Types ───────────────────────────────────────────────────────────────
 
@@ -15,6 +16,7 @@ export type ProjectData = {
   graph: ProjectGraph
   entitySchema: SchemaType[]
   relSchema: RelationshipType[]
+  conceptSchema: ConceptSchemaType[]
 }
 
 export type ProjectStore = {
@@ -43,6 +45,7 @@ export function makeDefaultProject(id = 'default', name = 'My World'): ProjectDa
     graph: { nodes: [], edges: [] },
     entitySchema: DEFAULT_SCHEMA_TYPES,
     relSchema: DEFAULT_RELATIONSHIP_TYPES,
+    conceptSchema: DEFAULT_CONCEPT_SCHEMAS,
   }
 }
 
@@ -83,7 +86,14 @@ export function loadProjectStore(): ProjectStore {
   // 1. Try reading the new unified store.
   try {
     const raw = localStorage.getItem(STORE_KEY)
-    if (raw) return JSON.parse(raw) as ProjectStore
+    if (raw) {
+      const store = JSON.parse(raw) as ProjectStore
+      // Normalize: add conceptSchema to projects that predate this field
+      for (const p of Object.values(store.projects)) {
+        if (!p.conceptSchema) p.conceptSchema = DEFAULT_CONCEPT_SCHEMAS
+      }
+      return store
+    }
   } catch {}
 
   // 2. Try migrating from legacy flat keys (existing users).

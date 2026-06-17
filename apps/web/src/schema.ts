@@ -3,6 +3,7 @@ export type SchemaField = {
   name: string
   description?: string
   defaultValue?: string
+  isBlock?: boolean
 }
 
 export type SchemaType = {
@@ -10,6 +11,7 @@ export type SchemaType = {
   name: string
   parentId?: string
   fields: SchemaField[]
+  conceptSchemaIds?: string[]
 }
 
 export type ResolvedField = SchemaField & {

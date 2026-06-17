@@ -20,9 +20,13 @@ import { RelationshipModal } from './RelationshipModal'
 import { SchemaEditorPanel } from './SchemaEditorPanel'
 import { RelationshipSchemaEditorPanel } from './RelationshipSchemaEditorPanel'
 import { ColorPicker } from './ColorPicker'
-import { entityColors, edgeStyleForLabel, SIZE_LEVELS, type GraphNode, type NodeData, type SizeLevel } from './types'
+import { entityColors, edgeStyleForLabel, SIZE_LEVELS, type FieldBlock, type GraphNode, type NodeData, type SizeLevel } from './types'
 import { resolveFields, type SchemaType, type ResolvedField } from './schema'
+import { FieldBlockEditor } from './FieldBlockEditor'
 import { resolveRelationshipType, type RelationshipType } from './relationshipSchema'
+import { DEFAULT_CONCEPT_SCHEMAS, type ConceptSchemaType } from './conceptSchema'
+import { ConceptObjectEditor } from './ConceptObjectEditor'
+import { ConceptSchemaEditorPanel } from './ConceptSchemaEditorPanel'
 import {
   loadProjectStore, saveProjectStore, getActiveProject,
   type ProjectStore,
@@ -64,6 +68,7 @@ function normalizeGraph(raw: { nodes: any[]; edges: any[] }): { nodes: GraphNode
       description: n.data.description ?? '',
       color:       n.data.color,
       sizeLevel:   (n.data.sizeLevel as SizeLevel | undefined) ?? 3,
+      concepts:    n.data.concepts,
     } satisfies NodeData,
   }))
   const edges: Edge[] = raw.edges.map((e: any) => ({
@@ -75,6 +80,7 @@ function normalizeGraph(raw: { nodes: any[]; edges: any[] }): { nodes: GraphNode
       schemaColor:        e.data?.schemaColor,
       relationshipTypeId: e.data?.relationshipTypeId,
       description:        e.data?.description,
+      whyItMatters:       e.data?.whyItMatters,
     },
   }))
   return { nodes, edges }
@@ -108,8 +114,11 @@ export function GraphEditor() {
   const initial = useMemo(() => normalizeGraph(activeProject.graph as any), [])
   const [nodes, setNodes, onNodesChange] = useNodesState<GraphNode>(initial.nodes)
   const [edges, setEdges, onEdgesChange] = useEdgesState(initial.edges)
-  const [schemaTypes, setSchemaTypes]   = useState<SchemaType[]>(() => activeProject.entitySchema)
-  const [relTypes, setRelTypes]         = useState<RelationshipType[]>(() => activeProject.relSchema)
+  const [schemaTypes, setSchemaTypes]     = useState<SchemaType[]>(() => activeProject.entitySchema)
+  const [relTypes, setRelTypes]           = useState<RelationshipType[]>(() => activeProject.relSchema)
+  const [conceptSchema, setConceptSchema] = useState<ConceptSchemaType[]>(
+    () => activeProject.conceptSchema ?? DEFAULT_CONCEPT_SCHEMAS,
+  )
 
   const schemaRef   = useRef(schemaTypes)
   const relTypesRef = useRef(relTypes)
@@ -120,8 +129,9 @@ export function GraphEditor() {
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null)
   const [selectedEdgeId, setSelectedEdgeId] = useState<string | null>(null)
   const [pendingConn, setPendingConn]       = useState<Connection | null>(null)
-  const [showSchema, setShowSchema]         = useState(false)
-  const [showRelSchema, setShowRelSchema]   = useState(false)
+  const [showSchema, setShowSchema]               = useState(false)
+  const [showRelSchema, setShowRelSchema]         = useState(false)
+  const [showConceptSchema, setShowConceptSchema] = useState(false)
 
   const [mode, setMode] = useState<UIMode>(
     () => (localStorage.getItem(UI_MODE_KEY) as UIMode | null) ?? 'story',
@@ -134,6 +144,7 @@ export function GraphEditor() {
       if (m === 'story') return 'system'
       setShowSchema(false)
       setShowRelSchema(false)
+      setShowConceptSchema(false)
       return 'story'
     })
   }, [])
@@ -152,12 +163,13 @@ export function GraphEditor() {
           graph: { nodes: nodes as any, edges: edges as any },
           entitySchema: schemaTypes,
           relSchema: relTypes,
+          conceptSchema,
         },
       },
     }
     storeRef.current = next
     saveProjectStore(next)
-  }, [nodes, edges, schemaTypes, relTypes])
+  }, [nodes, edges, schemaTypes, relTypes, conceptSchema])
 
   // ── Re-sync schemaColor when relationship schema changes ──────────────
   useEffect(() => {
@@ -292,6 +304,13 @@ export function GraphEditor() {
     ))
   }, [selectedEdgeId, setEdges])
 
+  const updateEdgeWhyItMatters = useCallback((whyItMatters: string) => {
+    if (!selectedEdgeId) return
+    setEdges(eds => eds.map(e =>
+      e.id !== selectedEdgeId ? e : { ...e, data: { ...e.data, whyItMatters: whyItMatters || undefined } }
+    ))
+  }, [selectedEdgeId, setEdges])
+
   const updateEdgeTypeId = useCallback((typeId: string) => {
     if (!selectedEdgeId) return
     setEdges(eds => eds.map(e => {
@@ -346,21 +365,41 @@ export function GraphEditor() {
           {!story && (
             <>
               <button
-                onClick={() => { setShowSchema(s => !s); setShowRelSchema(false) }}
+                onClick={() => { setShowSchema(s => !s); setShowRelSchema(false); setShowConceptSchema(false) }}
                 style={{ ...toolbarBtn, background: showSchema ? '#6366f1' : '#fafafa', color: showSchema ? '#fff' : '#18181b', border: '1px solid #e4e4e7' }}
               >
                 Entity Schema
               </button>
               <button
-                onClick={() => { setShowRelSchema(s => !s); setShowSchema(false) }}
+                onClick={() => { setShowRelSchema(s => !s); setShowSchema(false); setShowConceptSchema(false) }}
                 style={{ ...toolbarBtn, background: showRelSchema ? '#0ea5e9' : '#fafafa', color: showRelSchema ? '#fff' : '#18181b', border: '1px solid #e4e4e7' }}
               >
                 Rel. Schema
               </button>
+              <button
+                onClick={() => { setShowConceptSchema(s => !s); setShowSchema(false); setShowRelSchema(false) }}
+                style={{ ...toolbarBtn, background: showConceptSchema ? '#a855f7' : '#fafafa', color: showConceptSchema ? '#fff' : '#18181b', border: '1px solid #e4e4e7' }}
+              >
+                Concepts
+              </button>
             </>
           )}
 
-          <span style={{ fontSize: 12, color: '#71717a' }}>double-click · Enter</span>
+          {!story && <span style={{ fontSize: 12, color: '#71717a' }}>double-click · Enter</span>}
+
+          {story && (
+            <span
+              title={nodes.length > 20
+                ? 'Large graphs can be hard to read. Consider breaking this into sub-worlds.'
+                : 'Aim for a graph readable in 30–60 seconds'}
+              style={{
+                fontSize: 11,
+                color: nodes.length > 20 ? '#f59e0b' : '#a1a1aa',
+              }}
+            >
+              {nodes.length > 20 ? '⚠ ' : ''}{nodes.length} {nodes.length === 1 ? 'entity' : 'entities'}
+            </span>
+          )}
 
           <button
             onClick={toggleMode}
@@ -401,12 +440,12 @@ export function GraphEditor() {
         }}>
           {selectedNode && (story
             ? <StoryEntityPanel
-                node={selectedNode} schemaTypes={schemaTypes}
+                node={selectedNode} schemaTypes={schemaTypes} conceptSchemas={conceptSchema}
                 resolvedFields={resolvedFields} relationships={selectedRelationships}
                 onUpdate={updateNode}
               />
             : <SystemEntityPanel
-                node={selectedNode} schemaTypes={schemaTypes}
+                node={selectedNode} schemaTypes={schemaTypes} conceptSchemas={conceptSchema}
                 resolvedFields={resolvedFields} relationships={selectedRelationships}
                 onUpdate={updateNode}
               />
@@ -416,6 +455,7 @@ export function GraphEditor() {
                 edge={selectedEdge} nodes={nodes}
                 onUpdateLabel={updateEdgeLabel}
                 onUpdateDescription={updateEdgeDescription}
+                onUpdateWhyItMatters={updateEdgeWhyItMatters}
                 onUpdateColor={updateEdgeColor}
               />
             : <SystemEdgePanel
@@ -431,10 +471,20 @@ export function GraphEditor() {
       )}
 
       {showSchema && (
-        <SchemaEditorPanel schemaTypes={schemaTypes} onChange={setSchemaTypes} onClose={() => setShowSchema(false)} />
+        <SchemaEditorPanel
+          schemaTypes={schemaTypes} conceptSchemas={conceptSchema}
+          onChange={setSchemaTypes} onClose={() => setShowSchema(false)}
+        />
       )}
       {showRelSchema && (
         <RelationshipSchemaEditorPanel relationshipTypes={relTypes} onChange={setRelTypes} onClose={() => setShowRelSchema(false)} />
+      )}
+      {showConceptSchema && (
+        <ConceptSchemaEditorPanel
+          conceptSchemas={conceptSchema}
+          onChange={setConceptSchema}
+          onClose={() => setShowConceptSchema(false)}
+        />
       )}
       {pendingConn && (
         <RelationshipModal
@@ -454,6 +504,7 @@ type RelationshipList = { outgoing: { label: string; peer: string }[]; incoming:
 type EntityPanelProps = {
   node: GraphNode
   schemaTypes: SchemaType[]
+  conceptSchemas: ConceptSchemaType[]
   resolvedFields: ResolvedField[]
   relationships: RelationshipList
   onUpdate: (u: Partial<NodeData>) => void
@@ -464,6 +515,7 @@ type StoryEdgePanelProps = {
   nodes: GraphNode[]
   onUpdateLabel: (l: string) => void
   onUpdateDescription: (d: string) => void
+  onUpdateWhyItMatters?: (w: string) => void
   onUpdateColor: (c: string) => void
 }
 
@@ -475,7 +527,13 @@ type SystemEdgePanelProps = StoryEdgePanelProps & {
 
 // ── Story-mode entity panel ───────────────────────────────────────────────
 
-function StoryEntityPanel({ node, schemaTypes, resolvedFields, relationships, onUpdate }: EntityPanelProps) {
+function StoryEntityPanel({ node, schemaTypes, conceptSchemas, resolvedFields, relationships, onUpdate }: EntityPanelProps) {
+  const entitySchemaType = schemaTypes.find(st => st.id === node.data.typeId)
+  const allowedConceptIds = entitySchemaType?.conceptSchemaIds ?? []
+  const existingConceptIds = Object.keys(node.data.concepts ?? {})
+    .filter(k => (node.data.concepts?.[k]?.length ?? 0) > 0)
+  const visibleConceptIds = [...new Set([...allowedConceptIds, ...existingConceptIds])]
+
   return (
     <>
       <PanelField label="Name">
@@ -509,9 +567,8 @@ function StoryEntityPanel({ node, schemaTypes, resolvedFields, relationships, on
         </div>
       </PanelField>
 
-      {/* Phase 1: "Importance" in story mode instead of "Emphasis" */}
       <PanelField label="Importance">
-        <EmphasisPicker value={node.data.sizeLevel ?? 3} onChange={v => onUpdate({ sizeLevel: v })} />
+        <EmphasisPicker value={node.data.sizeLevel ?? 3} onChange={v => onUpdate({ sizeLevel: v })} showHint />
       </PanelField>
 
       <PanelField label="Color">
@@ -530,20 +587,50 @@ function StoryEntityPanel({ node, schemaTypes, resolvedFields, relationships, on
       {resolvedFields.length > 0 && (
         <PanelField label="Details">
           <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-            {resolvedFields.map(f => (
-              <div key={f.id}>
-                <span style={{ fontSize: 12, fontWeight: 600, color: '#52525b', display: 'block', marginBottom: 4 }}>
-                  {f.name}
-                </span>
-                <input
-                  value={(node.data.fields ?? {})[f.id] ?? ''}
-                  onChange={e => onUpdate({ fields: { ...(node.data.fields ?? {}), [f.id]: e.target.value } })}
-                  placeholder={f.description ?? f.defaultValue ?? ''}
-                  style={inputStyle}
-                />
-              </div>
-            ))}
+            {resolvedFields.map(f => {
+              const rawValue = (node.data.fields ?? {})[f.id]
+              if (f.isBlock) {
+                const blocks = Array.isArray(rawValue) ? (rawValue as FieldBlock[]) : []
+                return (
+                  <div key={f.id}>
+                    <span style={{ fontSize: 12, fontWeight: 600, color: '#52525b', display: 'block', marginBottom: 4 }}>
+                      {f.name}
+                    </span>
+                    <FieldBlockEditor
+                      fieldName={f.name}
+                      blocks={blocks}
+                      onChange={newBlocks => onUpdate({ fields: { ...(node.data.fields ?? {}), [f.id]: newBlocks } })}
+                    />
+                  </div>
+                )
+              }
+              const strValue = typeof rawValue === 'string' ? rawValue : ''
+              return (
+                <div key={f.id}>
+                  <span style={{ fontSize: 12, fontWeight: 600, color: '#52525b', display: 'block', marginBottom: 4 }}>
+                    {f.name}
+                  </span>
+                  <input
+                    value={strValue}
+                    onChange={e => onUpdate({ fields: { ...(node.data.fields ?? {}), [f.id]: e.target.value } })}
+                    placeholder={f.description ?? f.defaultValue ?? ''}
+                    style={inputStyle}
+                  />
+                </div>
+              )
+            })}
           </div>
+        </PanelField>
+      )}
+
+      {visibleConceptIds.length > 0 && (
+        <PanelField label="Concepts">
+          <ConceptObjectEditor
+            node={node}
+            conceptSchemas={conceptSchemas}
+            allowedConceptIds={visibleConceptIds}
+            onUpdate={onUpdate}
+          />
         </PanelField>
       )}
 
@@ -556,7 +643,13 @@ function StoryEntityPanel({ node, schemaTypes, resolvedFields, relationships, on
 
 // ── System-mode entity panel ──────────────────────────────────────────────
 
-function SystemEntityPanel({ node, schemaTypes, resolvedFields, relationships, onUpdate }: EntityPanelProps) {
+function SystemEntityPanel({ node, schemaTypes, conceptSchemas, resolvedFields, relationships, onUpdate }: EntityPanelProps) {
+  const entitySchemaType = schemaTypes.find(st => st.id === node.data.typeId)
+  const allowedConceptIds = entitySchemaType?.conceptSchemaIds ?? []
+  const existingConceptIds = Object.keys(node.data.concepts ?? {})
+    .filter(k => (node.data.concepts?.[k]?.length ?? 0) > 0)
+  const visibleConceptIds = [...new Set([...allowedConceptIds, ...existingConceptIds])]
+
   return (
     <>
       <h2 style={panelHeading}>Entity</h2>
@@ -603,8 +696,9 @@ function SystemEntityPanel({ node, schemaTypes, resolvedFields, relationships, o
       {resolvedFields.length > 0 && (
         <PanelField label="Fields">
           <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-            {resolvedFields.map(f => (
-              <div key={f.id}>
+            {resolvedFields.map(f => {
+              const rawValue = (node.data.fields ?? {})[f.id]
+              const header = (
                 <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 4 }}>
                   <span style={{ fontSize: 12, fontWeight: 600, color: f.inherited ? '#a1a1aa' : '#52525b' }}>
                     {f.name}
@@ -614,15 +708,39 @@ function SystemEntityPanel({ node, schemaTypes, resolvedFields, relationships, o
                       ↑ {f.fromTypeName}
                     </span>
                   )}
+                  {f.isBlock && (
+                    <span style={{ fontSize: 10, color: '#6366f1', background: '#ede9fe', padding: '1px 5px', borderRadius: 4 }}>
+                      blocks
+                    </span>
+                  )}
                 </div>
-                <input
-                  value={(node.data.fields ?? {})[f.id] ?? ''}
-                  onChange={e => onUpdate({ fields: { ...(node.data.fields ?? {}), [f.id]: e.target.value } })}
-                  placeholder={f.description ?? f.defaultValue ?? ''}
-                  style={inputStyle}
-                />
-              </div>
-            ))}
+              )
+              if (f.isBlock) {
+                const blocks = Array.isArray(rawValue) ? (rawValue as FieldBlock[]) : []
+                return (
+                  <div key={f.id}>
+                    {header}
+                    <FieldBlockEditor
+                      fieldName={f.name}
+                      blocks={blocks}
+                      onChange={newBlocks => onUpdate({ fields: { ...(node.data.fields ?? {}), [f.id]: newBlocks } })}
+                    />
+                  </div>
+                )
+              }
+              const strValue = typeof rawValue === 'string' ? rawValue : ''
+              return (
+                <div key={f.id}>
+                  {header}
+                  <input
+                    value={strValue}
+                    onChange={e => onUpdate({ fields: { ...(node.data.fields ?? {}), [f.id]: e.target.value } })}
+                    placeholder={f.description ?? f.defaultValue ?? ''}
+                    style={inputStyle}
+                  />
+                </div>
+              )
+            })}
           </div>
         </PanelField>
       )}
@@ -636,6 +754,17 @@ function SystemEntityPanel({ node, schemaTypes, resolvedFields, relationships, o
         />
       </PanelField>
 
+      {visibleConceptIds.length > 0 && (
+        <PanelField label="Concepts">
+          <ConceptObjectEditor
+            node={node}
+            conceptSchemas={conceptSchemas}
+            allowedConceptIds={visibleConceptIds}
+            onUpdate={onUpdate}
+          />
+        </PanelField>
+      )}
+
       <PanelField label="Relationships">
         <ConnectionsList relationships={relationships} />
       </PanelField>
@@ -645,7 +774,7 @@ function SystemEntityPanel({ node, schemaTypes, resolvedFields, relationships, o
 
 // ── Story-mode edge panel ─────────────────────────────────────────────────
 
-function StoryEdgePanel({ edge, nodes, onUpdateLabel, onUpdateDescription, onUpdateColor }: StoryEdgePanelProps) {
+function StoryEdgePanel({ edge, nodes, onUpdateLabel, onUpdateDescription, onUpdateWhyItMatters = () => {}, onUpdateColor }: StoryEdgePanelProps) {
   const sourceName = nodes.find(n => n.id === edge.source)?.data.label ?? edge.source
   const targetName = nodes.find(n => n.id === edge.target)?.data.label ?? edge.target
   return (
@@ -670,6 +799,14 @@ function StoryEdgePanel({ edge, nodes, onUpdateLabel, onUpdateDescription, onUpd
           value={(edge.data?.description as string | undefined) ?? ''}
           onChange={e => onUpdateDescription(e.target.value)}
           rows={3} placeholder="Any context about this connection…"
+          style={{ ...inputStyle, resize: 'vertical' }}
+        />
+      </PanelField>
+      <PanelField label="Why this matters">
+        <textarea
+          value={(edge.data?.whyItMatters as string | undefined) ?? ''}
+          onChange={e => onUpdateWhyItMatters(e.target.value)}
+          rows={2} placeholder="What does this connection mean for the story?"
           style={{ ...inputStyle, resize: 'vertical' }}
         />
       </PanelField>
@@ -753,22 +890,30 @@ function SystemEdgePanel({ edge, nodes, relTypes, onUpdateLabel, onUpdateDescrip
 
 // ── Shared sub-components ─────────────────────────────────────────────────
 
-function EmphasisPicker({ value, onChange }: { value: SizeLevel; onChange: (v: SizeLevel) => void }) {
+function EmphasisPicker({ value, onChange, showHint }: { value: SizeLevel; onChange: (v: SizeLevel) => void; showHint?: boolean }) {
+  const activeLevel = SIZE_LEVELS.find(l => l.level === value)
   return (
-    <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4 }}>
-      {SIZE_LEVELS.map(({ level, label }) => {
-        const active = value === level
-        return (
-          <button key={level} onClick={() => onChange(level)} style={{
-            padding: '3px 8px', borderRadius: 999,
-            border: `1.5px solid ${active ? '#18181b' : '#d4d4d8'}`,
-            background: active ? '#18181b' : 'transparent',
-            color: active ? '#fff' : '#52525b',
-            fontWeight: 600, fontSize: 11, cursor: 'pointer',
-            transition: 'background 0.1s, color 0.1s, border-color 0.1s',
-          }}>{label}</button>
-        )
-      })}
+    <div>
+      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4 }}>
+        {SIZE_LEVELS.map(({ level, label, hint }) => {
+          const active = value === level
+          return (
+            <button key={level} onClick={() => onChange(level)} title={hint} style={{
+              padding: '3px 8px', borderRadius: 999,
+              border: `1.5px solid ${active ? '#18181b' : '#d4d4d8'}`,
+              background: active ? '#18181b' : 'transparent',
+              color: active ? '#fff' : '#52525b',
+              fontWeight: 600, fontSize: 11, cursor: 'pointer',
+              transition: 'background 0.1s, color 0.1s, border-color 0.1s',
+            }}>{label}</button>
+          )
+        })}
+      </div>
+      {showHint && activeLevel && (
+        <span style={{ fontSize: 11, color: '#a1a1aa', marginTop: 4, display: 'block' }}>
+          {activeLevel.hint}
+        </span>
+      )}
     </div>
   )
 }

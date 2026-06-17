@@ -1,14 +1,16 @@
 import { useState } from 'react'
 import type { SchemaType, SchemaField } from './schema'
 import { resolveFields, uid } from './schema'
+import type { ConceptSchemaType } from './conceptSchema'
 
 type Props = {
   schemaTypes: SchemaType[]
+  conceptSchemas: ConceptSchemaType[]
   onChange: (types: SchemaType[]) => void
   onClose: () => void
 }
 
-export function SchemaEditorPanel({ schemaTypes, onChange, onClose }: Props) {
+export function SchemaEditorPanel({ schemaTypes, conceptSchemas, onChange, onClose }: Props) {
   const [selectedId, setSelectedId] = useState<string>(schemaTypes[0]?.id ?? '')
 
   const selected = schemaTypes.find(t => t.id === selectedId) ?? null
@@ -223,6 +225,18 @@ export function SchemaEditorPanel({ schemaTypes, onChange, onClose }: Props) {
                             placeholder="Hint shown as placeholder when editing entities"
                             style={{ ...textInput, fontSize: 12, color: '#71717a' }}
                           />
+                          <label style={{
+                            display: 'flex', alignItems: 'center', gap: 6,
+                            fontSize: 12, color: '#52525b', cursor: 'pointer', userSelect: 'none',
+                          }}>
+                            <input
+                              type="checkbox"
+                              checked={f.isBlock ?? false}
+                              onChange={e => updateField(f.id, { isBlock: e.target.checked })}
+                              style={{ cursor: 'pointer' }}
+                            />
+                            Structured blocks (repeatable groups)
+                          </label>
                         </div>
                         <button onClick={() => deleteField(f.id)} style={iconBtn}>✕</button>
                       </div>
@@ -230,6 +244,46 @@ export function SchemaEditorPanel({ schemaTypes, onChange, onClose }: Props) {
                     <button onClick={addField} style={ghostBtn}>+ Add Field</button>
                   </div>
                 </EditorField>
+
+                {/* Supported Concepts */}
+                {conceptSchemas.length > 0 && (
+                  <EditorField label="Supports Concepts">
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 7 }}>
+                      {conceptSchemas.map(cs => {
+                        const checked = selected.conceptSchemaIds?.includes(cs.id) ?? false
+                        return (
+                          <label key={cs.id} style={{
+                            display: 'flex', alignItems: 'center', gap: 8,
+                            cursor: 'pointer', padding: '6px 10px',
+                            border: `1px solid ${checked ? '#d8b4fe' : '#e4e4e7'}`,
+                            borderRadius: 7,
+                            background: checked ? '#faf0fe' : '#fafafa',
+                            transition: 'background 0.1s',
+                          }}>
+                            <input
+                              type="checkbox"
+                              checked={checked}
+                              onChange={e => {
+                                const current = selected.conceptSchemaIds ?? []
+                                const next = e.target.checked
+                                  ? [...current, cs.id]
+                                  : current.filter(id => id !== cs.id)
+                                updateType({ conceptSchemaIds: next.length > 0 ? next : undefined })
+                              }}
+                              style={{ cursor: 'pointer', flexShrink: 0 }}
+                            />
+                            <div>
+                              <span style={{ fontSize: 13, fontWeight: 600, color: '#18181b' }}>{cs.name}</span>
+                              {cs.description && (
+                                <span style={{ fontSize: 11, color: '#71717a', marginLeft: 6 }}>{cs.description}</span>
+                              )}
+                            </div>
+                          </label>
+                        )
+                      })}
+                    </div>
+                  </EditorField>
+                )}
 
                 {/* Delete */}
                 <div style={{ paddingTop: 8, borderTop: '1px solid #fee2e2', marginTop: 'auto' }}>

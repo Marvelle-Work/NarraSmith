@@ -3,32 +3,47 @@ import type { CSSProperties } from 'react'
 
 export type SizeLevel = 1 | 2 | 3 | 4 | 5
 
-export const SIZE_LEVELS: { level: SizeLevel; label: string; diameter: number; fontSize: number }[] = [
-  { level: 1, label: 'Background', diameter: 52,  fontSize: 10 },
-  { level: 2, label: 'Minor',      diameter: 66,  fontSize: 10 },
-  { level: 3, label: 'Standard',   diameter: 80,  fontSize: 11 },
-  { level: 4, label: 'Important',  diameter: 100, fontSize: 12 },
-  { level: 5, label: 'Core',       diameter: 124, fontSize: 13 },
+export const SIZE_LEVELS: { level: SizeLevel; label: string; diameter: number; fontSize: number; hint: string }[] = [
+  { level: 1, label: 'Background', diameter: 52,  fontSize: 10, hint: 'World filler — exists but rarely central' },
+  { level: 2, label: 'Minor',      diameter: 66,  fontSize: 10, hint: 'Side entity — supports the main story' },
+  { level: 3, label: 'Standard',   diameter: 80,  fontSize: 11, hint: 'Normal entity — part of the world' },
+  { level: 4, label: 'Important',  diameter: 100, fontSize: 12, hint: 'Story relevant — drives or shapes events' },
+  { level: 5, label: 'Core',       diameter: 124, fontSize: 13, hint: 'Narrative anchor — central to everything' },
 ]
+
+export type FieldBlock = {
+  id: string
+  label?: string
+  values: Record<string, string>
+}
+
+export type ConceptInstance = {
+  id: string
+  label?: string
+  typeId: string
+  values: Record<string, string | FieldBlock[]>
+}
 
 export type NodeData = {
   label: string
   entityType: string
-  typeId?: string                    // references SchemaType.id
-  fields?: Record<string, string>    // field values keyed by SchemaField.id
+  typeId?: string
+  fields?: Record<string, string | FieldBlock[]>
   description?: string
   color?: string
   sizeLevel?: SizeLevel
+  concepts?: Record<string, ConceptInstance[]>
 }
 
 export type GraphNode = Node<NodeData>
 
 export type EdgeData = {
   labelT?: number
-  color?: string           // manual override — highest priority
-  schemaColor?: string     // derived from RelationshipType.defaultColor
+  color?: string
+  schemaColor?: string
   relationshipTypeId?: string
   description?: string
+  whyItMatters?: string
 }
 
 export const ENTITY_TYPE_PRESETS = ['Character', 'Event', 'Location', 'Object'] as const
