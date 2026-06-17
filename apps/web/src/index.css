@@ -9,3 +9,12 @@ body {
   background: #0a0a0a;
   color: #f0f0f0;
 }
+
+/* React Flow defaults node-color and control-button-color to `inherit`, which
+   picks up the light body color and makes text/icons invisible on white panels.
+   Override via React Flow's own CSS variables instead of fighting specificity. */
+.react-flow {
+  --xy-node-color-default: #18181b;
+  --xy-controls-button-color-default: #18181b;
+  --xy-controls-button-color-hover-default: #111;
+}
