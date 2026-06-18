@@ -32,6 +32,11 @@ import {
   loadProjectStore, saveProjectStore, getActiveProject,
   type ProjectStore,
 } from './projectStore'
+import {
+  buildExportPayload, downloadExportJson, importProject, mergeIntoProject,
+} from './projectIO'
+import { ImportModal, type ImportAction } from './ImportModal'
+import { ExportModal } from './ExportModal'
 
 const nodeTypes = { circle: CircleNode }
 const edgeTypes = { relationship: RelationshipEdge }
@@ -134,6 +139,8 @@ export function GraphEditor() {
   const [showRelSchema, setShowRelSchema]         = useState(false)
   const [showConceptSchema, setShowConceptSchema] = useState(false)
   const [showIndex, setShowIndex]                 = useState(false)
+  const [showImport, setShowImport]                = useState(false)
+  const [exportPayload, setExportPayload]         = useState<{ json: string; fileName: string } | null>(null)
 
   const [mode, setMode] = useState<UIMode>(
     () => (localStorage.getItem(UI_MODE_KEY) as UIMode | null) ?? 'story',
@@ -150,6 +157,41 @@ export function GraphEditor() {
       return 'story'
     })
   }, [])
+
+  // ── Import / Export ────────────────────────────────────────────────────
+  const handleExport = useCallback(() => {
+    setExportPayload(buildExportPayload(storeRef.current))
+  }, [])
+
+  const handleImportAction = useCallback((action: ImportAction) => {
+    if (action.kind === 'new') {
+      const next = importProject(action.data, storeRef.current)
+      storeRef.current = next
+      const project = getActiveProject(next)
+      const normalized = normalizeGraph(project.graph as any)
+      setNodes(normalized.nodes)
+      setEdges(normalized.edges)
+      setSchemaTypes(project.entitySchema)
+      setRelTypes(project.relSchema)
+      setConceptSchema(project.conceptSchema ?? [])
+      setSelectedNodeId(null)
+      setSelectedEdgeId(null)
+      setShowImport(false)
+      return null
+    }
+
+    const currentProject = getActiveProject(storeRef.current)
+    const { project: merged, report } = mergeIntoProject(action.data, currentProject)
+    const normalized = normalizeGraph(merged.graph as any)
+    setNodes(normalized.nodes)
+    setEdges(normalized.edges)
+    setSchemaTypes(merged.entitySchema)
+    setRelTypes(merged.relSchema)
+    setConceptSchema(merged.conceptSchema ?? [])
+    setSelectedNodeId(null)
+    setSelectedEdgeId(null)
+    return report
+  }, [setNodes, setEdges])
 
   // ── Single consolidated persistence (Phase 2) ─────────────────────────
   // All project data — graph, entity schema, relationship schema — is written
@@ -357,6 +399,37 @@ export function GraphEditor() {
 
       {/* Canvas */}
       <div style={{ flex: 1, position: 'relative' }} onDoubleClick={onCanvasDoubleClick}>
+
+        {/* Top-right toolbar: file operations + world index */}
+        <div style={{ position: 'absolute', top: 12, right: 12, zIndex: 10, display: 'flex', gap: 6, alignItems: 'center' }}>
+          <button
+            onClick={() => setShowImport(true)}
+            title="Import a Narrasmith project — file or paste"
+            style={topRightBtn}
+          >
+            Import
+          </button>
+          <button
+            onClick={handleExport}
+            title="Export this project — download or copy"
+            style={topRightBtn}
+          >
+            Export
+          </button>
+          <button
+            onClick={() => setShowIndex(s => !s)}
+            title="World Index — browse all entities, connections and concepts"
+            style={{
+              ...topRightBtn,
+              background: showIndex ? '#18181b' : '#fff',
+              color: showIndex ? '#fff' : '#52525b',
+              fontWeight: 700, fontSize: 14,
+            }}
+          >
+            ≡
+          </button>
+        </div>
+
         <div style={{ position: 'absolute', top: 12, left: 12, zIndex: 10, display: 'flex', gap: 8, alignItems: 'center' }}>
           {/* Phase 1: "New Entity" → "New" in story mode */}
           <button onClick={createEntityAtCenter} style={toolbarBtn}>
@@ -402,21 +475,6 @@ export function GraphEditor() {
               {nodes.length > 20 ? '⚠ ' : ''}{nodes.length} {nodes.length === 1 ? 'entity' : 'entities'}
             </span>
           )}
-
-          <button
-            onClick={() => setShowIndex(s => !s)}
-            title="World Index — browse all entities, connections and concepts"
-            style={{
-              padding: '6px 10px',
-              background: showIndex ? '#18181b' : 'transparent',
-              color: showIndex ? '#fff' : '#71717a',
-              border: '1px solid #e4e4e7',
-              borderRadius: 6, cursor: 'pointer', fontWeight: 600, fontSize: 13,
-              transition: 'all 0.15s',
-            }}
-          >
-            ≡
-          </button>
 
           <button
             onClick={toggleMode}
@@ -516,6 +574,21 @@ export function GraphEditor() {
           sourceLabel={pendingSource} targetLabel={pendingTarget}
           relationshipTypes={relTypes} mode={mode}
           onSelect={confirmRelationship} onCancel={() => setPendingConn(null)}
+        />
+      )}
+      {showImport && (
+        <ImportModal
+          currentProject={getActiveProject(storeRef.current)}
+          onConfirm={handleImportAction}
+          onCancel={() => setShowImport(false)}
+        />
+      )}
+      {exportPayload && (
+        <ExportModal
+          json={exportPayload.json}
+          fileName={exportPayload.fileName}
+          onDownload={() => downloadExportJson(exportPayload.json, exportPayload.fileName)}
+          onClose={() => setExportPayload(null)}
         />
       )}
     </div>
@@ -994,6 +1067,15 @@ const toolbarBtn: React.CSSProperties = {
   background: '#18181b', color: '#fff',
   border: 'none', borderRadius: 6,
   cursor: 'pointer', fontWeight: 600, fontSize: 13,
+}
+
+const topRightBtn: React.CSSProperties = {
+  padding: '6px 12px',
+  background: '#fff', color: '#52525b',
+  border: '1px solid #e4e4e7',
+  borderRadius: 6, cursor: 'pointer', fontWeight: 600, fontSize: 12,
+  boxShadow: '0 1px 4px rgba(0,0,0,0.08)',
+  transition: 'all 0.15s',
 }
 
 const inputStyle: React.CSSProperties = {
