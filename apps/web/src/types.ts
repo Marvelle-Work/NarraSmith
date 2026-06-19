@@ -33,6 +33,7 @@ export type NodeData = {
   color?: string
   sizeLevel?: SizeLevel
   concepts?: Record<string, ConceptInstance[]>
+  isRoot?: boolean
 }
 
 export type GraphNode = Node<NodeData>

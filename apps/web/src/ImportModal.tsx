@@ -1,13 +1,14 @@
 import { useRef, useState } from 'react'
 import type { ProjectData } from './projectStore'
 import {
-  validateImportFile, buildImportPreview, buildMergePreview,
-  type NarrasmithExport, type ImportPreview, type MergePreview, type MergeReport,
+  validateImportContent, buildContentPreview, buildMergePreview,
+  type NarrasmithExport, type NarrasmithFragment,
+  type ImportPreview, type MergePreview, type MergeReport,
 } from './projectIO'
 
 export type ImportAction =
   | { kind: 'new'; data: NarrasmithExport }
-  | { kind: 'merge'; data: NarrasmithExport }
+  | { kind: 'merge'; data: NarrasmithExport | NarrasmithFragment }
 
 type Props = {
   currentProject: ProjectData
@@ -15,10 +16,14 @@ type Props = {
   onCancel: () => void
 }
 
+type ContentData =
+  | { kind: 'project'; data: NarrasmithExport }
+  | { kind: 'fragment'; data: NarrasmithFragment }
+
 type Step =
   | { kind: 'input' }
-  | { kind: 'mode'; data: NarrasmithExport; newPreview: ImportPreview }
-  | { kind: 'merge-preview'; data: NarrasmithExport; mergePreview: MergePreview }
+  | { kind: 'mode'; content: ContentData; preview: ImportPreview }
+  | { kind: 'merge-preview'; content: ContentData; mergePreview: MergePreview }
   | { kind: 'report'; report: MergeReport }
 
 export function ImportModal({ currentProject, onConfirm, onCancel }: Props) {
@@ -30,13 +35,16 @@ export function ImportModal({ currentProject, onConfirm, onCancel }: Props) {
 
   const processRaw = (raw: string) => {
     setError(null)
-    const result = validateImportFile(raw)
+    const result = validateImportContent(raw)
     if (!result.ok) {
       setError(result.error)
       return
     }
-    const preview = buildImportPreview(result.data)
-    setStep({ kind: 'mode', data: result.data, newPreview: preview })
+    const content: ContentData = result.kind === 'project'
+      ? { kind: 'project', data: result.data }
+      : { kind: 'fragment', data: result.data }
+    const preview = buildContentPreview(content.kind === 'project' ? content.data : content.data)
+    setStep({ kind: 'mode', content, preview })
   }
 
   const handleFile = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -114,9 +122,12 @@ export function ImportModal({ currentProject, onConfirm, onCancel }: Props) {
           )}
 
           <div style={{ display: 'flex', gap: 10, justifyContent: 'flex-end', marginTop: 18 }}>
-            <button onClick={() => setStep({ kind: 'mode', data: step.data, newPreview: buildImportPreview(step.data) })} style={cancelBtn}>Back</button>
             <button onClick={() => {
-              const report = onConfirm({ kind: 'merge', data: step.data })
+              const preview = buildContentPreview(step.content.data)
+              setStep({ kind: 'mode', content: step.content, preview })
+            }} style={cancelBtn}>Back</button>
+            <button onClick={() => {
+              const report = onConfirm({ kind: 'merge', data: step.content.data })
               if (report) setStep({ kind: 'report', report })
             }} style={mergeBtn}>Merge</button>
           </div>
@@ -127,14 +138,15 @@ export function ImportModal({ currentProject, onConfirm, onCancel }: Props) {
 
   // ── Step: Mode choice (new project vs merge) ──────────────────────────
   if (step.kind === 'mode') {
-    const p = step.newPreview
+    const p = step.preview
+    const isFragment = step.content.kind === 'fragment'
     return (
       <div style={overlay} onClick={onCancel}>
         <div onClick={e => e.stopPropagation()} style={modal}>
-          <h2 style={heading}>Import Preview</h2>
+          <h2 style={heading}>{isFragment ? 'Fragment Preview' : 'Import Preview'}</h2>
 
           <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginBottom: 20 }}>
-            <Row label="Project Name" value={p.projectName} />
+            <Row label={isFragment ? 'Fragment' : 'Project Name'} value={p.projectName} />
             <Row label="Nodes" value={String(p.nodeCount)} />
             <Row label="Relationships" value={String(p.edgeCount)} />
             <Row label="Entity Schemas" value={String(p.entitySchemaCount)} />
@@ -143,11 +155,15 @@ export function ImportModal({ currentProject, onConfirm, onCancel }: Props) {
           </div>
 
           <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginBottom: 8 }}>
-            <button onClick={() => { onConfirm({ kind: 'new', data: step.data }); }} style={confirmBtn}>
-              Import as New Project
-            </button>
+            {!isFragment && (
+              <button onClick={() => {
+                onConfirm({ kind: 'new', data: (step.content as { kind: 'project'; data: NarrasmithExport }).data })
+              }} style={confirmBtn}>
+                Import as New Project
+              </button>
+            )}
             <button onClick={() => {
-              setStep({ kind: 'merge-preview', data: step.data, mergePreview: buildMergePreview(step.data, currentProject) })
+              setStep({ kind: 'merge-preview', content: step.content, mergePreview: buildMergePreview(step.content.data, currentProject) })
             }} style={mergeBtn}>
               Merge Into Current Project
             </button>
@@ -165,7 +181,8 @@ export function ImportModal({ currentProject, onConfirm, onCancel }: Props) {
   return (
     <div style={overlay} onClick={onCancel}>
       <div onClick={e => e.stopPropagation()} style={modal}>
-        <h2 style={heading}>Import Project</h2>
+        <h2 style={heading}>Import Content</h2>
+        <p style={subtitle}>Import a project or fragment.</p>
 
         <div style={{ display: 'flex', gap: 0, marginBottom: 16 }}>
           <button
@@ -264,7 +281,7 @@ const modal: React.CSSProperties = {
 }
 
 const heading: React.CSSProperties = {
-  margin: '0 0 14px', fontSize: 17, fontWeight: 700, color: '#18181b',
+  margin: '0 0 4px', fontSize: 17, fontWeight: 700, color: '#18181b',
 }
 
 const subtitle: React.CSSProperties = {

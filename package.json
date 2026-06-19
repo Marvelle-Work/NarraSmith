@@ -13,5 +13,8 @@
     "build:types": "npm run build --workspace=@narrasmith/shared-types",
     "typecheck": "npm run build:types && npm run typecheck --workspace=backend"
   },
-  "license": "ISC"
+  "license": "ISC",
+  "devDependencies": {
+    "playwright": "^1.61.0"
+  }
 }

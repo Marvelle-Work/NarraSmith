@@ -16,6 +16,7 @@ export type NarrasmithExport = {
     id: string
     name: string
     createdAt: string
+    updatedAt?: string
   }
 
   entitySchema: SchemaType[]
@@ -23,6 +24,47 @@ export type NarrasmithExport = {
   conceptSchema: ConceptSchemaType[]
 
   graph: ProjectGraph
+}
+
+// ── Fragment format ─────────────────────────────────────────────────────
+
+export type NarrasmithFragment = {
+  format: 'narrasmith-fragment'
+  version: 1
+  name?: string
+
+  entitySchema?: SchemaType[]
+  relationshipSchema?: RelationshipType[]
+  conceptSchema?: ConceptSchemaType[]
+
+  nodes: Record<string, unknown>[]
+  edges: Record<string, unknown>[]
+}
+
+// ── Unified mergeable content ───────────────────────────────────────────
+
+export type MergeableContent = {
+  entitySchema: SchemaType[]
+  relationshipSchema: RelationshipType[]
+  conceptSchema: ConceptSchemaType[]
+  graph: ProjectGraph
+}
+
+function toMergeable(data: NarrasmithExport | NarrasmithFragment): MergeableContent {
+  if (data.format === 'narrasmith-fragment') {
+    return {
+      entitySchema: data.entitySchema ?? [],
+      relationshipSchema: data.relationshipSchema ?? [],
+      conceptSchema: data.conceptSchema ?? [],
+      graph: { nodes: data.nodes, edges: data.edges },
+    }
+  }
+  return {
+    entitySchema: data.entitySchema,
+    relationshipSchema: data.relationshipSchema,
+    conceptSchema: data.conceptSchema,
+    graph: data.graph,
+  }
 }
 
 // ── Import preview summary ──────────────────────────────────────────────
@@ -62,8 +104,8 @@ export type MergeReport = {
 
 // ── Export ───────────────────────────────────────────────────────────────
 
-export function buildExportPayload(store: ProjectStore): { json: string; fileName: string } {
-  const project = getActiveProject(store)
+export function buildExportPayload(store: ProjectStore, projectId?: string): { json: string; fileName: string } {
+  const project = projectId ? store.projects[projectId] ?? getActiveProject(store) : getActiveProject(store)
   const payload: NarrasmithExport = {
     format: 'narrasmith-project',
     version: 1,
@@ -72,6 +114,7 @@ export function buildExportPayload(store: ProjectStore): { json: string; fileNam
       id: project.id,
       name: project.name,
       createdAt: project.createdAt,
+      updatedAt: project.updatedAt,
     },
     entitySchema: project.entitySchema,
     relationshipSchema: project.relSchema,
@@ -104,7 +147,19 @@ export type ValidationResult =
   | { ok: true; data: NarrasmithExport }
   | { ok: false; error: string }
 
+export type ContentValidationResult =
+  | { ok: true; kind: 'project'; data: NarrasmithExport }
+  | { ok: true; kind: 'fragment'; data: NarrasmithFragment }
+  | { ok: false; error: string }
+
 export function validateImportFile(raw: string): ValidationResult {
+  const result = validateImportContent(raw)
+  if (!result.ok) return result
+  if (result.kind === 'fragment') return { ok: false, error: 'Expected a project file, got a fragment.' }
+  return { ok: true, data: result.data }
+}
+
+export function validateImportContent(raw: string): ContentValidationResult {
   let parsed: unknown
   try {
     parsed = JSON.parse(raw)
@@ -118,10 +173,18 @@ export function validateImportFile(raw: string): ValidationResult {
 
   const obj = parsed as Record<string, unknown>
 
-  if (obj.format !== 'narrasmith-project') {
-    return { ok: false, error: 'Not a Narrasmith project file (missing format header).' }
+  if (obj.format === 'narrasmith-fragment') {
+    return validateFragment(obj, parsed)
   }
 
+  if (obj.format === 'narrasmith-project') {
+    return validateProject(obj, parsed)
+  }
+
+  return { ok: false, error: 'Not a Narrasmith file (missing format header). Expected "narrasmith-project" or "narrasmith-fragment".' }
+}
+
+function validateProject(obj: Record<string, unknown>, parsed: unknown): ContentValidationResult {
   if (obj.version !== 1) {
     return { ok: false, error: `Unsupported version: ${obj.version}. This app supports version 1.` }
   }
@@ -151,7 +214,35 @@ export function validateImportFile(raw: string): ValidationResult {
     return { ok: false, error: 'Missing conceptSchema array.' }
   }
 
-  return { ok: true, data: parsed as NarrasmithExport }
+  return { ok: true, kind: 'project', data: parsed as NarrasmithExport }
+}
+
+function validateFragment(obj: Record<string, unknown>, parsed: unknown): ContentValidationResult {
+  if (obj.version !== 1) {
+    return { ok: false, error: `Unsupported fragment version: ${obj.version}. This app supports version 1.` }
+  }
+
+  if (!Array.isArray(obj.nodes)) {
+    return { ok: false, error: 'Fragment must contain a nodes array.' }
+  }
+
+  if (!Array.isArray(obj.edges)) {
+    return { ok: false, error: 'Fragment must contain an edges array.' }
+  }
+
+  if (obj.entitySchema !== undefined && !Array.isArray(obj.entitySchema)) {
+    return { ok: false, error: 'entitySchema must be an array if present.' }
+  }
+
+  if (obj.relationshipSchema !== undefined && !Array.isArray(obj.relationshipSchema)) {
+    return { ok: false, error: 'relationshipSchema must be an array if present.' }
+  }
+
+  if (obj.conceptSchema !== undefined && !Array.isArray(obj.conceptSchema)) {
+    return { ok: false, error: 'conceptSchema must be an array if present.' }
+  }
+
+  return { ok: true, kind: 'fragment', data: parsed as NarrasmithFragment }
 }
 
 // ── Preview ─────────────────────────────────────────────────────────────
@@ -167,15 +258,32 @@ export function buildImportPreview(data: NarrasmithExport): ImportPreview {
   }
 }
 
+export function buildContentPreview(data: NarrasmithExport | NarrasmithFragment): ImportPreview {
+  const m = toMergeable(data)
+  const name = data.format === 'narrasmith-project'
+    ? ((data as NarrasmithExport).project as Record<string, unknown>)?.name as string ?? 'Untitled'
+    : (data as NarrasmithFragment).name ?? 'Fragment'
+  return {
+    projectName: name,
+    nodeCount: m.graph.nodes.length,
+    edgeCount: m.graph.edges.length,
+    entitySchemaCount: m.entitySchema.length,
+    relationshipSchemaCount: m.relationshipSchema.length,
+    conceptSchemaCount: m.conceptSchema.length,
+  }
+}
+
 // ── Import as new project ────────────────────────────────────────────────
 
 export function importProject(data: NarrasmithExport, store: ProjectStore): ProjectStore {
   const newId = `project-${uid()}`
+  const now = new Date().toISOString()
 
   const project: ProjectData = {
     id: newId,
     name: (data.project as Record<string, unknown>)?.name as string ?? 'Imported Project',
-    createdAt: (data.project as Record<string, unknown>)?.createdAt as string ?? new Date().toISOString(),
+    createdAt: (data.project as Record<string, unknown>)?.createdAt as string ?? now,
+    updatedAt: now,
     graph: data.graph,
     entitySchema: data.entitySchema,
     relSchema: data.relationshipSchema,
@@ -257,29 +365,30 @@ function remapEdges(
 }
 
 export function buildMergePreview(
-  data: NarrasmithExport,
+  data: NarrasmithExport | NarrasmithFragment,
   currentProject: ProjectData,
 ): MergePreview {
+  const m = toMergeable(data)
   const existingEntityNames = new Set(currentProject.entitySchema.map(s => s.name.toLowerCase()))
   const existingRelNames = new Set(currentProject.relSchema.map(s => s.name.toLowerCase()))
   const existingConceptNames = new Set(currentProject.conceptSchema.map(s => s.name.toLowerCase()))
 
   let entityAdd = 0, entitySkip = 0
-  for (const s of data.entitySchema) {
+  for (const s of m.entitySchema) {
     if (existingEntityNames.has(s.name.toLowerCase())) entitySkip++; else entityAdd++
   }
   let relAdd = 0, relSkip = 0
-  for (const s of data.relationshipSchema) {
+  for (const s of m.relationshipSchema) {
     if (existingRelNames.has(s.name.toLowerCase())) relSkip++; else relAdd++
   }
   let conceptAdd = 0, conceptSkip = 0
-  for (const s of data.conceptSchema) {
+  for (const s of m.conceptSchema) {
     if (existingConceptNames.has(s.name.toLowerCase())) conceptSkip++; else conceptAdd++
   }
 
   return {
-    nodesToAdd: data.graph.nodes.length,
-    edgesToAdd: data.graph.edges.length,
+    nodesToAdd: m.graph.nodes.length,
+    edgesToAdd: m.graph.edges.length,
     entitySchemasToAdd: entityAdd,
     entitySchemasToSkip: entitySkip,
     relSchemasToAdd: relAdd,
@@ -290,24 +399,26 @@ export function buildMergePreview(
 }
 
 export function mergeIntoProject(
-  data: NarrasmithExport,
+  data: NarrasmithExport | NarrasmithFragment,
   currentProject: ProjectData,
 ): { project: ProjectData; report: MergeReport } {
+  const m = toMergeable(data)
   const existingNodeIds = new Set(
     currentProject.graph.nodes.map(n => (n as { id?: string }).id ?? ''),
   )
 
-  const nodeRemap = buildNodeIdRemap(existingNodeIds, data.graph.nodes)
-  const remappedNodes = remapNodes(data.graph.nodes, nodeRemap)
-  const remappedEdges = remapEdges(data.graph.edges, nodeRemap)
+  const nodeRemap = buildNodeIdRemap(existingNodeIds, m.graph.nodes)
+  const remappedNodes = remapNodes(m.graph.nodes, nodeRemap)
+  const remappedEdges = remapEdges(m.graph.edges, nodeRemap)
 
-  const entityResult = deduplicateByName(currentProject.entitySchema, data.entitySchema)
-  const relResult = deduplicateByName(currentProject.relSchema, data.relationshipSchema)
-  const conceptResult = deduplicateByName(currentProject.conceptSchema, data.conceptSchema)
+  const entityResult = deduplicateByName(currentProject.entitySchema, m.entitySchema)
+  const relResult = deduplicateByName(currentProject.relSchema, m.relationshipSchema)
+  const conceptResult = deduplicateByName(currentProject.conceptSchema, m.conceptSchema)
 
   const project: ProjectData = {
     ...currentProject,
     graph: {
+      ...currentProject.graph,
       nodes: [...currentProject.graph.nodes, ...remappedNodes],
       edges: [...currentProject.graph.edges, ...remappedEdges],
     },

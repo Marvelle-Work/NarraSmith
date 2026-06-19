@@ -48,24 +48,22 @@ type UIMode = 'story' | 'system'
 
 const DEFAULT_GRAPH: { nodes: GraphNode[]; edges: Edge[] } = {
   nodes: [
-    { id: '1', type: 'circle', position: { x: 100, y: 100 }, data: { label: 'Ignia',   entityType: 'Character', typeId: 'schema-character', fields: {}, description: '', sizeLevel: 3 } },
-    { id: '2', type: 'circle', position: { x: 400, y: 100 }, data: { label: 'Abraxas', entityType: 'Character', typeId: 'schema-character', fields: {}, description: '', sizeLevel: 3 } },
+    { id: '1', type: 'circle', position: { x: 100, y: 200 }, data: { label: 'Character 1', entityType: 'Character', typeId: 'schema-character', fields: {}, description: '', sizeLevel: 3 } },
+    { id: '2', type: 'circle', position: { x: 400, y: 200 }, data: { label: 'Character 2', entityType: 'Character', typeId: 'schema-character', fields: {}, description: '', sizeLevel: 3 } },
+    { id: '3', type: 'circle', position: { x: 250, y: 450 }, data: { label: 'Location', entityType: 'Location', typeId: 'schema-location', fields: {}, description: '', sizeLevel: 3 } },
   ],
-  edges: [{
-    id: 'e1', source: '1', target: '2', label: 'Opposes',
-    type: 'relationship',
-    data: { labelT: 0.5, relationshipTypeId: 'rel-opposes', schemaColor: '#ef4444' },
-    style: { stroke: '#ef4444', strokeWidth: 2 },
-  }],
+  edges: [],
 }
 
 // ── Graph normalization (forward-migrations on raw stored data) ──────────
 
-function normalizeGraph(raw: { nodes: any[]; edges: any[] }): { nodes: GraphNode[]; edges: Edge[] } {
+function normalizeGraph(raw: { nodes: any[]; edges: any[]; rootNodeId?: string }): { nodes: GraphNode[]; edges: Edge[] } {
   if (!raw.nodes || raw.nodes.length === 0) return DEFAULT_GRAPH
-  const nodes: GraphNode[] = raw.nodes.map((n: any) => ({
+  const rootId = raw.rootNodeId
+  const nodes: GraphNode[] = raw.nodes.map((n: any, i: number) => ({
     ...n,
     type: 'circle',
+    position: n.position ?? { x: 100 + (i % 5) * 200, y: 100 + Math.floor(i / 5) * 200 },
     data: {
       label:       n.data.label ?? 'Untitled',
       entityType:  n.data.entityType ?? n.data.category ?? 'Character',
@@ -75,6 +73,7 @@ function normalizeGraph(raw: { nodes: any[]; edges: any[] }): { nodes: GraphNode
       color:       n.data.color,
       sizeLevel:   (n.data.sizeLevel as SizeLevel | undefined) ?? 3,
       concepts:    n.data.concepts,
+      isRoot:      n.id === rootId || undefined,
     } satisfies NodeData,
   }))
   const edges: Edge[] = raw.edges.map((e: any) => ({
@@ -109,11 +108,17 @@ function resolveEdgeStyle(
 
 // ── Component ────────────────────────────────────────────────────────────
 
-export function GraphEditor() {
+type GraphEditorProps = {
+  projectId: string
+  onBackToDashboard: () => void
+}
+
+export function GraphEditor({ projectId, onBackToDashboard }: GraphEditorProps) {
   const { screenToFlowPosition } = useReactFlow()
 
   // ── Project store (Phase 2) — ref so it never drives re-renders ─────────
   const storeRef = useRef<ProjectStore>(loadProjectStore())
+  storeRef.current = { ...storeRef.current, activeProjectId: projectId }
   const activeProject = getActiveProject(storeRef.current)
 
   // ── Initialize state from active project ─────────────────────────────
@@ -125,11 +130,21 @@ export function GraphEditor() {
   const [conceptSchema, setConceptSchema] = useState<ConceptSchemaType[]>(
     () => activeProject.conceptSchema ?? DEFAULT_CONCEPT_SCHEMAS,
   )
+  const [rootNodeId, setRootNodeId] = useState<string | null>(
+    () => (activeProject.graph as any).rootNodeId ?? null,
+  )
 
   const schemaRef   = useRef(schemaTypes)
   const relTypesRef = useRef(relTypes)
   useEffect(() => { schemaRef.current   = schemaTypes }, [schemaTypes])
   useEffect(() => { relTypesRef.current = relTypes    }, [relTypes])
+
+  useEffect(() => {
+    setNodes(nds => nds.map(n => ({
+      ...n,
+      data: { ...n.data, isRoot: n.id === rootNodeId || undefined },
+    })))
+  }, [rootNodeId]) // eslint-disable-line react-hooks/exhaustive-deps
 
   // ── UI state ──────────────────────────────────────────────────────────
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null)
@@ -204,16 +219,17 @@ export function GraphEditor() {
         ...current.projects,
         [current.activeProjectId]: {
           ...getActiveProject(current),
-          graph: { nodes: nodes as any, edges: edges as any },
+          graph: { nodes: nodes as any, edges: edges as any, rootNodeId: rootNodeId ?? undefined },
           entitySchema: schemaTypes,
           relSchema: relTypes,
           conceptSchema,
+          updatedAt: new Date().toISOString(),
         },
       },
     }
     storeRef.current = next
     saveProjectStore(next)
-  }, [nodes, edges, schemaTypes, relTypes, conceptSchema])
+  }, [nodes, edges, schemaTypes, relTypes, conceptSchema, rootNodeId])
 
   // ── Re-sync schemaColor when relationship schema changes ──────────────
   useEffect(() => {
@@ -431,7 +447,10 @@ export function GraphEditor() {
         </div>
 
         <div style={{ position: 'absolute', top: 12, left: 12, zIndex: 10, display: 'flex', gap: 8, alignItems: 'center' }}>
-          {/* Phase 1: "New Entity" → "New" in story mode */}
+          <button onClick={onBackToDashboard} style={backBtn}>
+            &larr; Projects
+          </button>
+
           <button onClick={createEntityAtCenter} style={toolbarBtn}>
             {story ? '+ New' : '+ New Entity'}
           </button>
@@ -518,11 +537,15 @@ export function GraphEditor() {
                 node={selectedNode} schemaTypes={schemaTypes} conceptSchemas={conceptSchema}
                 resolvedFields={resolvedFields} relationships={selectedRelationships}
                 onUpdate={updateNode}
+                isRoot={selectedNode.id === rootNodeId}
+                onToggleRoot={() => setRootNodeId(prev => prev === selectedNode.id ? null : selectedNode.id)}
               />
             : <SystemEntityPanel
                 node={selectedNode} schemaTypes={schemaTypes} conceptSchemas={conceptSchema}
                 resolvedFields={resolvedFields} relationships={selectedRelationships}
                 onUpdate={updateNode}
+                isRoot={selectedNode.id === rootNodeId}
+                onToggleRoot={() => setRootNodeId(prev => prev === selectedNode.id ? null : selectedNode.id)}
               />
           )}
           {selectedEdge && (story
@@ -606,6 +629,8 @@ type EntityPanelProps = {
   resolvedFields: ResolvedField[]
   relationships: RelationshipList
   onUpdate: (u: Partial<NodeData>) => void
+  isRoot: boolean
+  onToggleRoot: () => void
 }
 
 type StoryEdgePanelProps = {
@@ -625,7 +650,7 @@ type SystemEdgePanelProps = StoryEdgePanelProps & {
 
 // ── Story-mode entity panel ───────────────────────────────────────────────
 
-function StoryEntityPanel({ node, schemaTypes, conceptSchemas, resolvedFields, relationships, onUpdate }: EntityPanelProps) {
+function StoryEntityPanel({ node, schemaTypes, conceptSchemas, resolvedFields, relationships, onUpdate, isRoot, onToggleRoot }: EntityPanelProps) {
   const entitySchemaType = schemaTypes.find(st => st.id === node.data.typeId)
   const allowedConceptIds = entitySchemaType?.conceptSchemaIds ?? []
   const existingConceptIds = Object.keys(node.data.concepts ?? {})
@@ -735,13 +760,17 @@ function StoryEntityPanel({ node, schemaTypes, conceptSchemas, resolvedFields, r
       <PanelField label="Connections">
         <ConnectionsList relationships={relationships} />
       </PanelField>
+
+      <button onClick={onToggleRoot} style={rootToggleBtn(isRoot)}>
+        {isRoot ? '◆ Root Node' : '◇ Set as Root'}
+      </button>
     </>
   )
 }
 
 // ── System-mode entity panel ──────────────────────────────────────────────
 
-function SystemEntityPanel({ node, schemaTypes, conceptSchemas, resolvedFields, relationships, onUpdate }: EntityPanelProps) {
+function SystemEntityPanel({ node, schemaTypes, conceptSchemas, resolvedFields, relationships, onUpdate, isRoot, onToggleRoot }: EntityPanelProps) {
   const entitySchemaType = schemaTypes.find(st => st.id === node.data.typeId)
   const allowedConceptIds = entitySchemaType?.conceptSchemaIds ?? []
   const existingConceptIds = Object.keys(node.data.concepts ?? {})
@@ -866,6 +895,10 @@ function SystemEntityPanel({ node, schemaTypes, conceptSchemas, resolvedFields, 
       <PanelField label="Relationships">
         <ConnectionsList relationships={relationships} />
       </PanelField>
+
+      <button onClick={onToggleRoot} style={rootToggleBtn(isRoot)}>
+        {isRoot ? '◆ Root Node' : '◇ Set as Root'}
+      </button>
     </>
   )
 }
@@ -1062,6 +1095,14 @@ const panelHeading: React.CSSProperties = {
   margin: 0, fontSize: 15, fontWeight: 700, color: '#18181b',
 }
 
+const backBtn: React.CSSProperties = {
+  padding: '8px 14px',
+  background: '#fff', color: '#52525b',
+  border: '1px solid #e4e4e7', borderRadius: 6,
+  cursor: 'pointer', fontWeight: 600, fontSize: 13,
+  transition: 'all 0.15s',
+}
+
 const toolbarBtn: React.CSSProperties = {
   padding: '8px 14px',
   background: '#18181b', color: '#fff',
@@ -1077,6 +1118,17 @@ const topRightBtn: React.CSSProperties = {
   boxShadow: '0 1px 4px rgba(0,0,0,0.08)',
   transition: 'all 0.15s',
 }
+
+const rootToggleBtn = (active: boolean): React.CSSProperties => ({
+  padding: '6px 12px',
+  background: active ? '#18181b' : '#fff',
+  color: active ? '#fff' : '#71717a',
+  border: `1px solid ${active ? '#18181b' : '#d4d4d8'}`,
+  borderRadius: 6, cursor: 'pointer',
+  fontWeight: 600, fontSize: 12,
+  width: '100%',
+  transition: 'all 0.15s',
+})
 
 const inputStyle: React.CSSProperties = {
   padding: '7px 10px',
