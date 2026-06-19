@@ -37,6 +37,8 @@ import {
 } from './projectIO'
 import { ImportModal, type ImportAction } from './ImportModal'
 import { ExportModal } from './ExportModal'
+import { useAutoSave } from './hooks/useAutoSave'
+import { getProjectData } from './api/projects'
 
 const nodeTypes = { circle: CircleNode }
 const edgeTypes = { relationship: RelationshipEdge }
@@ -146,6 +148,37 @@ export function GraphEditor({ projectId, onBackToDashboard }: GraphEditorProps) 
     })))
   }, [rootNodeId]) // eslint-disable-line react-hooks/exhaustive-deps
 
+  // ── Cloud autosave ────────────────────────────────────────────────────
+  const { save: autoSave, setVersion } = useAutoSave(projectId)
+
+  // ── Cloud load — fetch API data and reconcile with local cache ────────
+  useEffect(() => {
+    let cancelled = false
+    getProjectData(projectId)
+      .then(({ projectData: cloudData, version }) => {
+        if (cancelled || !cloudData) return
+        setVersion(version)
+        const localProject = storeRef.current.projects[projectId]
+        const cloudTime = new Date(cloudData.updatedAt).getTime()
+        const localTime = localProject ? new Date(localProject.updatedAt).getTime() : 0
+        if (cloudTime > localTime) {
+          const normalized = normalizeGraph(cloudData.graph as any)
+          setNodes(normalized.nodes)
+          setEdges(normalized.edges)
+          setSchemaTypes(cloudData.entitySchema)
+          setRelTypes(cloudData.relSchema)
+          setConceptSchema(cloudData.conceptSchema ?? [])
+          setRootNodeId((cloudData.graph as any).rootNodeId ?? null)
+          storeRef.current.projects[projectId] = cloudData
+          saveProjectStore(storeRef.current)
+        }
+      })
+      .catch(err => {
+        console.warn('Failed to load from cloud, using local cache:', err)
+      })
+    return () => { cancelled = true }
+  }, [projectId]) // eslint-disable-line react-hooks/exhaustive-deps
+
   // ── UI state ──────────────────────────────────────────────────────────
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null)
   const [selectedEdgeId, setSelectedEdgeId] = useState<string | null>(null)
@@ -208,9 +241,7 @@ export function GraphEditor({ projectId, onBackToDashboard }: GraphEditorProps) 
     return report
   }, [setNodes, setEdges])
 
-  // ── Single consolidated persistence (Phase 2) ─────────────────────────
-  // All project data — graph, entity schema, relationship schema — is written
-  // to narrasmith-projects in one effect so the store is always consistent.
+  // ── Persistence: localStorage + debounced cloud save ────────────────
   useEffect(() => {
     const current = storeRef.current
     const next: ProjectStore = {
@@ -228,8 +259,8 @@ export function GraphEditor({ projectId, onBackToDashboard }: GraphEditorProps) 
       },
     }
     storeRef.current = next
-    saveProjectStore(next)
-  }, [nodes, edges, schemaTypes, relTypes, conceptSchema, rootNodeId])
+    autoSave(next)
+  }, [nodes, edges, schemaTypes, relTypes, conceptSchema, rootNodeId]) // eslint-disable-line react-hooks/exhaustive-deps
 
   // ── Re-sync schemaColor when relationship schema changes ──────────────
   useEffect(() => {

@@ -1,25 +1,23 @@
 import { useRef, useState } from 'react'
-import {
-  type ProjectStore, type ProjectData,
-  createProject, renameProject, duplicateProject, deleteProject,
-  createProjectFromTemplate,
-  saveProjectStore, setActiveProject,
-} from './projectStore'
+import { useAuth } from './auth/AuthProvider'
+import { useCloudProjects, type CloudProject } from './hooks/useCloudProjects'
 import { buildExportPayload, downloadExportJson } from './projectIO'
 import { ImportModal, type ImportAction } from './ImportModal'
 import { importProject, mergeIntoProject } from './projectIO'
-import { getActiveProject } from './projectStore'
+import { loadProjectStore, saveProjectStore, getActiveProject, makeDefaultProject, createProjectFromTemplate } from './projectStore'
+import type { ProjectStore } from './projectStore'
 import { ExportModal } from './ExportModal'
 import { ProjectTemplateModal } from './ProjectTemplateModal'
 import type { ProjectTemplate } from './templates'
+import * as api from './api/projects'
 
 type Props = {
-  store: ProjectStore
-  onStoreChange: (store: ProjectStore) => void
   onOpenProject: (projectId: string) => void
 }
 
-export function ProjectDashboard({ store, onStoreChange, onOpenProject }: Props) {
+export function ProjectDashboard({ onOpenProject }: Props) {
+  const { user, signOut } = useAuth()
+  const cloud = useCloudProjects()
   const [search, setSearch] = useState('')
   const [renaming, setRenaming] = useState<string | null>(null)
   const [renameValue, setRenameValue] = useState('')
@@ -28,84 +26,142 @@ export function ProjectDashboard({ store, onStoreChange, onOpenProject }: Props)
   const [exportPayload, setExportPayload] = useState<{ json: string; fileName: string } | null>(null)
   const [menuOpen, setMenuOpen] = useState<string | null>(null)
   const [showTemplates, setShowTemplates] = useState(false)
+  const [busy, setBusy] = useState(false)
   const renameInputRef = useRef<HTMLInputElement>(null)
 
-  const projects = Object.values(store.projects)
+  const projects = cloud.projects
     .filter(p => !search || p.name.toLowerCase().includes(search.toLowerCase()))
-    .sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime())
+    .sort((a, b) => {
+      const ta = a.updated_at ? new Date(a.updated_at).getTime() : 0
+      const tb = b.updated_at ? new Date(b.updated_at).getTime() : 0
+      return tb - ta
+    })
 
   const handleCreate = () => {
     setShowTemplates(true)
   }
 
-  const handleTemplateSelect = (template: ProjectTemplate) => {
-    const next = createProjectFromTemplate(store, template)
-    saveProjectStore(next)
-    onStoreChange(next)
-    setShowTemplates(false)
-    onOpenProject(next.activeProjectId)
+  const handleTemplateSelect = async (template: ProjectTemplate) => {
+    setBusy(true)
+    try {
+      const meta = await api.createProject(template.name)
+      const projectData = createProjectFromTemplate(
+        { version: 1, activeProjectId: '', projects: {} },
+        template,
+      ).projects[Object.keys(createProjectFromTemplate(
+        { version: 1, activeProjectId: '', projects: {} },
+        template,
+      ).projects)[0]]
+      const data = { ...projectData, id: meta.id }
+      await api.saveProjectData(meta.id, data, 0)
+      setShowTemplates(false)
+      onOpenProject(meta.id)
+    } catch (err) {
+      console.error('Failed to create project from template:', err)
+    } finally {
+      setBusy(false)
+    }
   }
 
   const handleOpen = (id: string) => {
-    const next = setActiveProject(store, id)
-    onStoreChange(next)
     onOpenProject(id)
   }
 
-  const startRename = (p: ProjectData) => {
+  const startRename = (p: CloudProject) => {
     setRenaming(p.id)
     setRenameValue(p.name)
     setMenuOpen(null)
     setTimeout(() => renameInputRef.current?.focus(), 0)
   }
 
-  const confirmRename = () => {
+  const confirmRename = async () => {
     if (!renaming || !renameValue.trim()) return
-    const next = renameProject(store, renaming, renameValue.trim())
-    saveProjectStore(next)
-    onStoreChange(next)
+    try {
+      await cloud.rename(renaming, renameValue.trim())
+    } catch (err) {
+      console.error('Rename failed:', err)
+    }
     setRenaming(null)
   }
 
-  const handleDuplicate = (id: string) => {
-    const next = duplicateProject(store, id)
-    saveProjectStore(next)
-    onStoreChange(next)
+  const handleDuplicate = async (id: string) => {
     setMenuOpen(null)
+    setBusy(true)
+    try {
+      await cloud.duplicate(id)
+    } catch (err) {
+      console.error('Duplicate failed:', err)
+    } finally {
+      setBusy(false)
+    }
   }
 
-  const handleExport = (id: string) => {
-    setExportPayload(buildExportPayload(store, id))
+  const handleExport = async (id: string) => {
     setMenuOpen(null)
+    try {
+      const { projectData } = await api.getProjectData(id)
+      if (!projectData) return
+      const store: ProjectStore = {
+        version: 1,
+        activeProjectId: id,
+        projects: { [id]: projectData },
+      }
+      setExportPayload(buildExportPayload(store, id))
+    } catch (err) {
+      console.error('Export failed:', err)
+    }
   }
 
-  const confirmDelete = () => {
+  const confirmDelete = async () => {
     if (!deleting) return
-    const next = deleteProject(store, deleting)
-    saveProjectStore(next)
-    onStoreChange(next)
+    try {
+      await cloud.remove(deleting)
+    } catch (err) {
+      console.error('Delete failed:', err)
+    }
     setDeleting(null)
   }
 
   const handleImportAction = (action: ImportAction) => {
     if (action.kind === 'new') {
-      const next = importProject(action.data, store)
-      onStoreChange(next)
+      const localStore = loadProjectStore()
+      const next = importProject(action.data, localStore)
+      const newId = next.activeProjectId
+      const newProject = next.projects[newId]
+      saveProjectStore(next)
+
+      api.createProject(newProject.name).then(async meta => {
+        const data = { ...newProject, id: meta.id }
+        await api.saveProjectData(meta.id, data, 0)
+        cloud.refresh()
+      }).catch(console.error)
+
       setShowImport(false)
       return null
     }
-    const currentProject = getActiveProject(store)
-    const { project: merged, report } = mergeIntoProject(action.data, currentProject)
-    const next: ProjectStore = {
-      ...store,
-      projects: { ...store.projects, [currentProject.id]: merged },
-    }
-    saveProjectStore(next)
-    onStoreChange(next)
+
+    const localStore = loadProjectStore()
+    const currentProject = getActiveProject(localStore)
+    const { report } = mergeIntoProject(action.data, currentProject)
     return report
   }
 
-  const deletingProject = deleting ? store.projects[deleting] : null
+  const deletingProject = deleting ? projects.find(p => p.id === deleting) : null
+
+  if (cloud.loading && projects.length === 0) {
+    return (
+      <div style={container}>
+        <div style={inner}>
+          <div style={header}>
+            <div>
+              <h1 style={title}>Narrasmith</h1>
+              <p style={subtitle}>Loading projects...</p>
+            </div>
+          </div>
+        </div>
+      </div>
+    )
+  }
 
   return (
     <div style={container}>
@@ -114,20 +170,33 @@ export function ProjectDashboard({ store, onStoreChange, onOpenProject }: Props)
         <div style={header}>
           <div>
             <h1 style={title}>Narrasmith</h1>
-            <p style={subtitle}>{projects.length} {projects.length === 1 ? 'project' : 'projects'}</p>
+            <p style={subtitle}>
+              {projects.length} {projects.length === 1 ? 'project' : 'projects'}
+              {user?.email && <span style={{ marginLeft: 8, color: '#a1a1aa' }}>{user.email}</span>}
+            </p>
           </div>
           <div style={{ display: 'flex', gap: 8 }}>
             <button onClick={() => setShowImport(true)} style={secondaryBtn}>
               Import
             </button>
-            <button onClick={handleCreate} style={primaryBtn}>
+            <button onClick={handleCreate} disabled={busy} style={primaryBtn}>
               + New Project
+            </button>
+            <button onClick={signOut} style={secondaryBtn}>
+              Sign Out
             </button>
           </div>
         </div>
 
+        {cloud.error && (
+          <div style={{ padding: '10px 14px', background: '#fef2f2', border: '1px solid #fecaca', borderRadius: 8, marginBottom: 20, fontSize: 13, color: '#dc2626', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+            <span>{cloud.error}</span>
+            <button onClick={cloud.refresh} style={{ ...secondaryBtn, padding: '4px 12px', fontSize: 12 }}>Retry</button>
+          </div>
+        )}
+
         {/* Search */}
-        {Object.keys(store.projects).length > 3 && (
+        {projects.length > 3 && (
           <input
             value={search}
             onChange={e => setSearch(e.target.value)}
@@ -163,13 +232,8 @@ export function ProjectDashboard({ store, onStoreChange, onOpenProject }: Props)
                   <h3 style={cardTitle}>{p.name}</h3>
                 )}
                 <div style={cardMeta}>
-                  <span>Created {formatDate(p.createdAt)}</span>
-                  <span>Modified {formatDate(p.updatedAt)}</span>
-                </div>
-                <div style={cardStats}>
-                  <span>{(p.graph.nodes?.length ?? 0)} entities</span>
-                  <span style={{ color: '#d4d4d8' }}>&middot;</span>
-                  <span>{(p.graph.edges?.length ?? 0)} connections</span>
+                  <span>Created {formatDate(p.created_at)}</span>
+                  <span>Modified {formatDate(p.updated_at)}</span>
                 </div>
               </div>
 
@@ -206,6 +270,12 @@ export function ProjectDashboard({ store, onStoreChange, onOpenProject }: Props)
           ))}
         </div>
 
+        {projects.length === 0 && !cloud.loading && !search && (
+          <p style={{ textAlign: 'center', color: '#a1a1aa', marginTop: 40 }}>
+            No projects yet. Create one to get started.
+          </p>
+        )}
+
         {projects.length === 0 && search && (
           <p style={{ textAlign: 'center', color: '#a1a1aa', marginTop: 40 }}>
             No projects match "{search}"
@@ -236,7 +306,7 @@ export function ProjectDashboard({ store, onStoreChange, onOpenProject }: Props)
 
       {showImport && (
         <ImportModal
-          currentProject={getActiveProject(store)}
+          currentProject={makeDefaultProject()}
           onConfirm={handleImportAction}
           onCancel={() => setShowImport(false)}
         />
@@ -254,7 +324,8 @@ export function ProjectDashboard({ store, onStoreChange, onOpenProject }: Props)
   )
 }
 
-function formatDate(iso: string): string {
+function formatDate(iso: string | null | undefined): string {
+  if (!iso) return ''
   try {
     const d = new Date(iso)
     const now = new Date()
@@ -337,11 +408,6 @@ const cardTitle: React.CSSProperties = {
 const cardMeta: React.CSSProperties = {
   display: 'flex', flexDirection: 'column', gap: 2,
   marginTop: 10, fontSize: 12, color: '#a1a1aa',
-}
-
-const cardStats: React.CSSProperties = {
-  display: 'flex', gap: 6,
-  marginTop: 8, fontSize: 12, color: '#71717a',
 }
 
 const cardActions: React.CSSProperties = {

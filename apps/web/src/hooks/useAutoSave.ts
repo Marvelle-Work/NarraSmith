@@ -1,0 +1,50 @@
+import { useRef, useCallback, useEffect } from 'react'
+import { saveProjectData } from '../api/projects'
+import { saveProjectStore } from '../projectStore'
+import type { ProjectData, ProjectStore } from '../projectStore'
+
+export function useAutoSave(projectId: string, delay = 2000) {
+  const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const pendingRef = useRef<ProjectData | null>(null)
+  const versionRef = useRef(0)
+  const savingRef = useRef(false)
+
+  const setVersion = useCallback((v: number) => { versionRef.current = v }, [])
+
+  const save = useCallback((store: ProjectStore) => {
+    saveProjectStore(store)
+
+    const project = store.projects[projectId]
+    if (!project) return
+
+    pendingRef.current = project
+
+    if (timerRef.current) clearTimeout(timerRef.current)
+    timerRef.current = setTimeout(async () => {
+      const data = pendingRef.current
+      if (!data || savingRef.current) return
+
+      savingRef.current = true
+      try {
+        const { version } = await saveProjectData(projectId, data, versionRef.current)
+        versionRef.current = version
+      } catch (err) {
+        console.warn('Cloud save failed, data preserved in localStorage:', err)
+      } finally {
+        savingRef.current = false
+      }
+    }, delay)
+  }, [projectId, delay])
+
+  useEffect(() => {
+    return () => {
+      if (timerRef.current) clearTimeout(timerRef.current)
+      const data = pendingRef.current
+      if (data) {
+        saveProjectData(projectId, data, versionRef.current).catch(() => {})
+      }
+    }
+  }, [projectId])
+
+  return { save, setVersion }
+}

@@ -11,22 +11,37 @@ export type Json =
 
 // ── Schema JSON shapes ────────────────────────────────────────────────────────
 
-export type FieldType = 'text' | 'number' | 'boolean' | 'date' | 'select'
+export type SchemaFieldJson = {
+  id: string
+  name: string
+  description?: string
+  defaultValue?: string
+  isBlock?: boolean
+}
 
+export type NodeTypeSchemaJson = {
+  fields: SchemaFieldJson[]
+  conceptSchemaIds?: string[]
+}
+
+export type RelationshipTypeSchemaJson = {
+  fields: SchemaFieldJson[]
+}
+
+export type ConceptTypeSchemaJson = {
+  fields: SchemaFieldJson[]
+}
+
+// Legacy types kept for backward compat
+export type FieldType = 'text' | 'number' | 'boolean' | 'date' | 'select'
 export type FieldDefinition = {
   name: string
   type: FieldType
   required?: boolean
-  options?: string[] // only valid when type === 'select'
+  options?: string[]
 }
-
-export type NodeTypeSchema = {
-  fields: FieldDefinition[]
-}
-
-export type RelationshipTypeSchema = {
-  fields: FieldDefinition[]
-}
+export type NodeTypeSchema = NodeTypeSchemaJson
+export type RelationshipTypeSchema = RelationshipTypeSchemaJson
 
 // ── Supabase Database type ────────────────────────────────────────────────────
 
@@ -40,6 +55,12 @@ export type Database = {
           name: string
           description: string | null
           created_at: string | null
+          project_data: Json | null
+          project_data_version: number
+          updated_at: string | null
+          share_id: string | null
+          visibility: string
+          import_hash: string | null
         }
         Insert: {
           id?: string
@@ -47,6 +68,12 @@ export type Database = {
           name: string
           description?: string | null
           created_at?: string | null
+          project_data?: Json | null
+          project_data_version?: number
+          updated_at?: string | null
+          share_id?: string | null
+          visibility?: string
+          import_hash?: string | null
         }
         Update: {
           id?: string
@@ -54,6 +81,12 @@ export type Database = {
           name?: string
           description?: string | null
           created_at?: string | null
+          project_data?: Json | null
+          project_data_version?: number
+          updated_at?: string | null
+          share_id?: string | null
+          visibility?: string
+          import_hash?: string | null
         }
         Relationships: []
       }
@@ -64,7 +97,9 @@ export type Database = {
           name: string
           icon: string | null
           color: string | null
-          schema_json: NodeTypeSchema
+          description: string | null
+          parent_id: string | null
+          schema_json: NodeTypeSchemaJson
           created_at: string | null
         }
         Insert: {
@@ -73,7 +108,9 @@ export type Database = {
           name: string
           icon?: string | null
           color?: string | null
-          schema_json: NodeTypeSchema
+          description?: string | null
+          parent_id?: string | null
+          schema_json: NodeTypeSchemaJson
           created_at?: string | null
         }
         Update: {
@@ -82,7 +119,9 @@ export type Database = {
           name?: string
           icon?: string | null
           color?: string | null
-          schema_json?: NodeTypeSchema
+          description?: string | null
+          parent_id?: string | null
+          schema_json?: NodeTypeSchemaJson
           created_at?: string | null
         }
         Relationships: []
@@ -125,19 +164,28 @@ export type Database = {
           id: string
           project_id: string
           name: string
-          schema_json: RelationshipTypeSchema | null
+          description: string | null
+          default_color: string | null
+          parent_id: string | null
+          schema_json: RelationshipTypeSchemaJson | null
         }
         Insert: {
           id?: string
           project_id: string
           name: string
-          schema_json?: RelationshipTypeSchema | null
+          description?: string | null
+          default_color?: string | null
+          parent_id?: string | null
+          schema_json?: RelationshipTypeSchemaJson | null
         }
         Update: {
           id?: string
           project_id?: string
           name?: string
-          schema_json?: RelationshipTypeSchema | null
+          description?: string | null
+          default_color?: string | null
+          parent_id?: string | null
+          schema_json?: RelationshipTypeSchemaJson | null
         }
         Relationships: []
       }
@@ -165,6 +213,33 @@ export type Database = {
           target_node_id?: string
           relationship_type_id?: string
           properties_json?: Record<string, Json> | null
+        }
+        Relationships: []
+      }
+      concept_types: {
+        Row: {
+          id: string
+          project_id: string
+          name: string
+          description: string | null
+          schema_json: ConceptTypeSchemaJson
+          created_at: string | null
+        }
+        Insert: {
+          id?: string
+          project_id: string
+          name: string
+          description?: string | null
+          schema_json: ConceptTypeSchemaJson
+          created_at?: string | null
+        }
+        Update: {
+          id?: string
+          project_id?: string
+          name?: string
+          description?: string | null
+          schema_json?: ConceptTypeSchemaJson
+          created_at?: string | null
         }
         Relationships: []
       }
