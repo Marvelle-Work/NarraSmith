@@ -45,15 +45,21 @@ export function ProjectDashboard({ onOpenProject }: Props) {
     setBusy(true)
     try {
       const meta = await api.createProject(template.name)
-      const projectData = createProjectFromTemplate(
+      const store = createProjectFromTemplate(
         { version: 1, activeProjectId: '', projects: {} },
         template,
-      ).projects[Object.keys(createProjectFromTemplate(
-        { version: 1, activeProjectId: '', projects: {} },
-        template,
-      ).projects)[0]]
-      const data = { ...projectData, id: meta.id }
-      await api.saveProjectData(meta.id, data, 0)
+      )
+      const projectData = Object.values(store.projects)[0]
+      await api.syncProjectData(
+        meta.id,
+        {
+          graph: projectData.graph,
+          entitySchema: projectData.entitySchema,
+          relSchema: projectData.relSchema,
+          conceptSchema: projectData.conceptSchema,
+        },
+        0,
+      )
       setShowTemplates(false)
       onOpenProject(meta.id)
     } catch (err) {
@@ -122,21 +128,19 @@ export function ProjectDashboard({ onOpenProject }: Props) {
     setDeleting(null)
   }
 
-  const handleImportAction = (action: ImportAction) => {
+  const handleImportAction = async (action: ImportAction) => {
     if (action.kind === 'new') {
-      const localStore = loadProjectStore()
-      const next = importProject(action.data, localStore)
-      const newId = next.activeProjectId
-      const newProject = next.projects[newId]
-      saveProjectStore(next)
-
-      api.createProject(newProject.name).then(async meta => {
-        const data = { ...newProject, id: meta.id }
-        await api.saveProjectData(meta.id, data, 0)
-        cloud.refresh()
-      }).catch(console.error)
-
-      setShowImport(false)
+      setBusy(true)
+      try {
+        const result = await api.importProjectToCloud(action.data)
+        await cloud.refresh()
+        setShowImport(false)
+        onOpenProject(result.projectId)
+      } catch (err) {
+        console.error('Import failed:', err)
+      } finally {
+        setBusy(false)
+      }
       return null
     }
 

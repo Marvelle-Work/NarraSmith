@@ -379,7 +379,7 @@ const dndCampaign: ProjectTemplate = {
     nodes: [
       {
         id: 'dnd-session', type: 'circle',
-        position: { x: 0, y: 100 },
+        position: { x: -161, y: 158 },
         data: { label: 'Session 1', entityType: 'Session', typeId: 'schema-session', fields: {}, description: '', sizeLevel: 3 },
       },
       {
@@ -394,7 +394,7 @@ const dndCampaign: ProjectTemplate = {
       },
       {
         id: 'dnd-quest', type: 'circle',
-        position: { x: 300, y: 350 },
+        position: { x: 156, y: 364 },
         data: { label: 'Missing Children Quest', entityType: 'Quest', typeId: 'schema-quest', fields: {}, description: '', sizeLevel: 4 },
       },
       {
@@ -404,7 +404,7 @@ const dndCampaign: ProjectTemplate = {
       },
       {
         id: 'dnd-forest-road', type: 'circle',
-        position: { x: 600, y: 50 },
+        position: { x: 489, y: 91 },
         data: { label: 'Forest Road', entityType: 'Location', typeId: 'schema-location', fields: {}, description: '', sizeLevel: 2 },
       },
       {
@@ -427,7 +427,7 @@ const dndCampaign: ProjectTemplate = {
       {
         id: 'dnd-e1', source: 'dnd-session', target: 'dnd-mayor', label: 'Introduces',
         type: 'relationship',
-        data: { labelT: 0.5, relationshipTypeId: 'rel-introduces', schemaColor: '#2dd4bf' },
+        data: { labelT: 0.658, relationshipTypeId: 'rel-introduces', schemaColor: '#2dd4bf' },
         style: { stroke: '#2dd4bf', strokeWidth: 2 },
       },
       {
@@ -457,7 +457,7 @@ const dndCampaign: ProjectTemplate = {
       {
         id: 'dnd-e6', source: 'dnd-ambush', target: 'dnd-forest-road', label: 'Located In',
         type: 'relationship',
-        data: { labelT: 0.5, relationshipTypeId: 'rel-located-in', schemaColor: '#64748b' },
+        data: { labelT: 0.292, relationshipTypeId: 'rel-located-in', schemaColor: '#64748b' },
         style: { stroke: '#64748b', strokeWidth: 2 },
       },
       {
@@ -469,7 +469,7 @@ const dndCampaign: ProjectTemplate = {
       {
         id: 'dnd-e8', source: 'dnd-quest', target: 'dnd-cave', label: 'Located In',
         type: 'relationship',
-        data: { labelT: 0.5, relationshipTypeId: 'rel-located-in', schemaColor: '#64748b' },
+        data: { labelT: 0.662, relationshipTypeId: 'rel-located-in', schemaColor: '#64748b' },
         style: { stroke: '#64748b', strokeWidth: 2 },
       },
       {

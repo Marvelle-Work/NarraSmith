@@ -1,5 +1,5 @@
 import { useRef, useCallback, useEffect } from 'react'
-import { saveProjectData } from '../api/projects'
+import { syncProjectData } from '../api/projects'
 import { saveProjectStore } from '../projectStore'
 import type { ProjectData, ProjectStore } from '../projectStore'
 
@@ -26,10 +26,19 @@ export function useAutoSave(projectId: string, delay = 2000) {
 
       savingRef.current = true
       try {
-        const { version } = await saveProjectData(projectId, data, versionRef.current)
+        const { version } = await syncProjectData(
+          projectId,
+          {
+            graph: data.graph,
+            entitySchema: data.entitySchema,
+            relSchema: data.relSchema,
+            conceptSchema: data.conceptSchema ?? [],
+          },
+          versionRef.current,
+        )
         versionRef.current = version
       } catch (err) {
-        console.warn('Cloud save failed, data preserved in localStorage:', err)
+        console.warn('Cloud sync failed, data preserved in localStorage:', err)
       } finally {
         savingRef.current = false
       }
@@ -41,7 +50,16 @@ export function useAutoSave(projectId: string, delay = 2000) {
       if (timerRef.current) clearTimeout(timerRef.current)
       const data = pendingRef.current
       if (data) {
-        saveProjectData(projectId, data, versionRef.current).catch(() => {})
+        syncProjectData(
+          projectId,
+          {
+            graph: data.graph,
+            entitySchema: data.entitySchema,
+            relSchema: data.relSchema,
+            conceptSchema: data.conceptSchema ?? [],
+          },
+          versionRef.current,
+        ).catch(() => {})
       }
     }
   }, [projectId])

@@ -12,7 +12,7 @@ export type ImportAction =
 
 type Props = {
   currentProject: ProjectData
-  onConfirm: (action: ImportAction) => MergeReport | null
+  onConfirm: (action: ImportAction) => MergeReport | null | Promise<MergeReport | null>
   onCancel: () => void
 }
 

@@ -93,6 +93,7 @@ export type Database = {
       node_types: {
         Row: {
           id: string
+          client_id: string
           project_id: string
           name: string
           icon: string | null
@@ -104,6 +105,7 @@ export type Database = {
         }
         Insert: {
           id?: string
+          client_id: string
           project_id: string
           name: string
           icon?: string | null
@@ -115,6 +117,7 @@ export type Database = {
         }
         Update: {
           id?: string
+          client_id?: string
           project_id?: string
           name?: string
           icon?: string | null
@@ -129,6 +132,7 @@ export type Database = {
       nodes: {
         Row: {
           id: string
+          client_id: string
           project_id: string
           node_type_id: string
           title: string
@@ -139,6 +143,7 @@ export type Database = {
         }
         Insert: {
           id?: string
+          client_id: string
           project_id: string
           node_type_id: string
           title: string
@@ -149,6 +154,7 @@ export type Database = {
         }
         Update: {
           id?: string
+          client_id?: string
           project_id?: string
           node_type_id?: string
           title?: string
@@ -162,6 +168,7 @@ export type Database = {
       relationship_types: {
         Row: {
           id: string
+          client_id: string
           project_id: string
           name: string
           description: string | null
@@ -171,6 +178,7 @@ export type Database = {
         }
         Insert: {
           id?: string
+          client_id: string
           project_id: string
           name: string
           description?: string | null
@@ -180,6 +188,7 @@ export type Database = {
         }
         Update: {
           id?: string
+          client_id?: string
           project_id?: string
           name?: string
           description?: string | null
@@ -192,6 +201,7 @@ export type Database = {
       relationships: {
         Row: {
           id: string
+          client_id: string
           project_id: string
           source_node_id: string
           target_node_id: string
@@ -200,6 +210,7 @@ export type Database = {
         }
         Insert: {
           id?: string
+          client_id: string
           project_id: string
           source_node_id: string
           target_node_id: string
@@ -208,6 +219,7 @@ export type Database = {
         }
         Update: {
           id?: string
+          client_id?: string
           project_id?: string
           source_node_id?: string
           target_node_id?: string
@@ -219,6 +231,7 @@ export type Database = {
       concept_types: {
         Row: {
           id: string
+          client_id: string
           project_id: string
           name: string
           description: string | null
@@ -227,6 +240,7 @@ export type Database = {
         }
         Insert: {
           id?: string
+          client_id: string
           project_id: string
           name: string
           description?: string | null
@@ -235,6 +249,7 @@ export type Database = {
         }
         Update: {
           id?: string
+          client_id?: string
           project_id?: string
           name?: string
           description?: string | null

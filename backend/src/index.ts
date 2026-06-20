@@ -9,6 +9,7 @@ import nodeTypesRoutes from './routes/node-types.js'
 import nodesRoutes from './routes/nodes.js'
 import relationshipTypesRoutes from './routes/relationship-types.js'
 import relationshipsRoutes from './routes/relationships.js'
+import syncRoutes from './routes/sync.js'
 
 declare module 'fastify' {
   interface FastifyRequest {
@@ -50,6 +51,7 @@ app.register(async (api) => {
   // which confirms the caller owns the project before touching its data.
   api.register(async (projectApi) => {
     projectApi.addHook('preHandler', verifyProjectOwnership)
+    projectApi.register(syncRoutes)
     projectApi.register(nodeTypesRoutes,         { prefix: '/node-types' })
     projectApi.register(nodesRoutes,             { prefix: '/nodes' })
     projectApi.register(relationshipTypesRoutes, { prefix: '/relationship-types' })

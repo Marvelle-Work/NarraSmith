@@ -150,31 +150,36 @@ export function GraphEditor({ projectId, onBackToDashboard }: GraphEditorProps) 
 
   // ── Cloud autosave ────────────────────────────────────────────────────
   const { save: autoSave, setVersion } = useAutoSave(projectId)
+  const cloudLoadedRef = useRef(false)
 
   // ── Cloud load — fetch API data and reconcile with local cache ────────
   useEffect(() => {
     let cancelled = false
     getProjectData(projectId)
       .then(({ projectData: cloudData, version }) => {
-        if (cancelled || !cloudData) return
-        setVersion(version)
-        const localProject = storeRef.current.projects[projectId]
-        const cloudTime = new Date(cloudData.updatedAt).getTime()
-        const localTime = localProject ? new Date(localProject.updatedAt).getTime() : 0
-        if (cloudTime > localTime) {
-          const normalized = normalizeGraph(cloudData.graph as any)
-          setNodes(normalized.nodes)
-          setEdges(normalized.edges)
-          setSchemaTypes(cloudData.entitySchema)
-          setRelTypes(cloudData.relSchema)
-          setConceptSchema(cloudData.conceptSchema ?? [])
-          setRootNodeId((cloudData.graph as any).rootNodeId ?? null)
-          storeRef.current.projects[projectId] = cloudData
-          saveProjectStore(storeRef.current)
+        if (cancelled) return
+        if (cloudData) {
+          setVersion(version)
+          const localProject = storeRef.current.projects[projectId]
+          const cloudTime = new Date(cloudData.updatedAt).getTime()
+          const localTime = localProject ? new Date(localProject.updatedAt).getTime() : 0
+          if (cloudTime >= localTime) {
+            const normalized = normalizeGraph(cloudData.graph as any)
+            setNodes(normalized.nodes)
+            setEdges(normalized.edges)
+            setSchemaTypes(cloudData.entitySchema)
+            setRelTypes(cloudData.relSchema)
+            setConceptSchema(cloudData.conceptSchema ?? [])
+            setRootNodeId((cloudData.graph as any).rootNodeId ?? null)
+            storeRef.current.projects[projectId] = cloudData
+            saveProjectStore(storeRef.current)
+          }
         }
+        cloudLoadedRef.current = true
       })
       .catch(err => {
         console.warn('Failed to load from cloud, using local cache:', err)
+        cloudLoadedRef.current = true
       })
     return () => { cancelled = true }
   }, [projectId]) // eslint-disable-line react-hooks/exhaustive-deps
@@ -242,7 +247,10 @@ export function GraphEditor({ projectId, onBackToDashboard }: GraphEditorProps) 
   }, [setNodes, setEdges])
 
   // ── Persistence: localStorage + debounced cloud save ────────────────
+  // Guard: don't save until cloud data has been loaded (prevents overwriting with empty state)
   useEffect(() => {
+    if (!cloudLoadedRef.current) return
+
     const current = storeRef.current
     const next: ProjectStore = {
       ...current,

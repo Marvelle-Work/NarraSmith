@@ -2,6 +2,7 @@ import type { FastifyInstance } from 'fastify'
 import type { Json } from '@narrasmith/shared-types'
 import { createHash } from 'crypto'
 import { db } from '../db.js'
+import { rebuildProjectSnapshot } from '../lib/snapshot.js'
 
 type SchemaField = {
   id: string
@@ -169,6 +170,7 @@ export default async function importRoutes(app: FastifyInstance) {
 
       if (entitySchemas.length > 0) {
         const nodeTypeRows = entitySchemas.map(s => ({
+          client_id: s.id,
           project_id: projectId,
           name: s.name,
           schema_json: {
@@ -180,14 +182,12 @@ export default async function importRoutes(app: FastifyInstance) {
         const { data: inserted, error } = await db
           .from('node_types')
           .insert(nodeTypeRows)
-          .select('id, name')
+          .select('id, client_id')
 
         if (error) throw new Error(`node_types insert failed: ${error.message}`)
 
-        for (let i = 0; i < entitySchemas.length; i++) {
-          if (inserted?.[i]) {
-            nodeTypeMap.set(entitySchemas[i].id, inserted[i].id)
-          }
+        for (const row of inserted ?? []) {
+          nodeTypeMap.set(row.client_id, row.id)
         }
         stats.nodeTypesCreated = inserted?.length ?? 0
       }
@@ -212,6 +212,7 @@ export default async function importRoutes(app: FastifyInstance) {
 
       if (relSchemas.length > 0) {
         const relTypeRows = relSchemas.map(s => ({
+          client_id: s.id,
           project_id: projectId,
           name: s.name,
           description: s.description ?? null,
@@ -221,14 +222,12 @@ export default async function importRoutes(app: FastifyInstance) {
         const { data: inserted, error } = await db
           .from('relationship_types')
           .insert(relTypeRows)
-          .select('id, name')
+          .select('id, client_id')
 
         if (error) throw new Error(`relationship_types insert failed: ${error.message}`)
 
-        for (let i = 0; i < relSchemas.length; i++) {
-          if (inserted?.[i]) {
-            relTypeMap.set(relSchemas[i].id, inserted[i].id)
-          }
+        for (const row of inserted ?? []) {
+          relTypeMap.set(row.client_id, row.id)
         }
         stats.relationshipTypesCreated = inserted?.length ?? 0
       }
@@ -253,6 +252,7 @@ export default async function importRoutes(app: FastifyInstance) {
 
       if (conceptSchemas.length > 0) {
         const conceptRows = conceptSchemas.map(s => ({
+          client_id: s.id,
           project_id: projectId,
           name: s.name,
           description: s.description ?? null,
@@ -262,14 +262,12 @@ export default async function importRoutes(app: FastifyInstance) {
         const { data: inserted, error } = await db
           .from('concept_types')
           .insert(conceptRows)
-          .select('id, name')
+          .select('id, client_id')
 
         if (error) throw new Error(`concept_types insert failed: ${error.message}`)
 
-        for (let i = 0; i < conceptSchemas.length; i++) {
-          if (inserted?.[i]) {
-            conceptTypeMap.set(conceptSchemas[i].id, inserted[i].id)
-          }
+        for (const row of inserted ?? []) {
+          conceptTypeMap.set(row.client_id, row.id)
         }
         stats.conceptTypesCreated = inserted?.length ?? 0
       }
@@ -289,6 +287,7 @@ export default async function importRoutes(app: FastifyInstance) {
 
           return {
             id: nodeMap.get(n.id)!,
+            client_id: n.id,
             project_id: projectId,
             node_type_id: mappedTypeId ?? fallbackTypeId ?? crypto.randomUUID(),
             title: n.data.label ?? 'Untitled',
@@ -323,6 +322,7 @@ export default async function importRoutes(app: FastifyInstance) {
 
             return {
               id: crypto.randomUUID(),
+              client_id: e.id,
               project_id: projectId,
               source_node_id: nodeMap.get(e.source)!,
               target_node_id: nodeMap.get(e.target)!,
@@ -346,7 +346,7 @@ export default async function importRoutes(app: FastifyInstance) {
       }
 
       // ── Step 5: Rebuild project_data snapshot (cache) ──────────────
-      const snapshot = await rebuildProjectSnapshot(projectId, nodeTypeMap, relTypeMap, conceptTypeMap)
+      const snapshot = await rebuildProjectSnapshot(projectId)
       await db
         .from('projects')
         .update({
@@ -366,96 +366,4 @@ export default async function importRoutes(app: FastifyInstance) {
       })
     }
   })
-}
-
-async function rebuildProjectSnapshot(
-  projectId: string,
-  nodeTypeMap: Map<string, string>,
-  relTypeMap: Map<string, string>,
-  conceptTypeMap: Map<string, string>,
-): Promise<Record<string, unknown>> {
-  const [nodesRes, relsRes, nodeTypesRes, relTypesRes, conceptTypesRes] = await Promise.all([
-    db.from('nodes').select('*').eq('project_id', projectId),
-    db.from('relationships').select('*').eq('project_id', projectId),
-    db.from('node_types').select('*').eq('project_id', projectId),
-    db.from('relationship_types').select('*').eq('project_id', projectId),
-    db.from('concept_types').select('*').eq('project_id', projectId),
-  ])
-
-  const entitySchema = (nodeTypesRes.data ?? []).map(nt => ({
-    id: nt.id,
-    name: nt.name,
-    parentId: nt.parent_id ?? undefined,
-    fields: (nt.schema_json as any)?.fields ?? [],
-    conceptSchemaIds: (nt.schema_json as any)?.conceptSchemaIds ?? undefined,
-  }))
-
-  const relSchema = (relTypesRes.data ?? []).map(rt => ({
-    id: rt.id,
-    name: rt.name,
-    description: rt.description ?? undefined,
-    defaultColor: rt.default_color ?? undefined,
-    parentId: rt.parent_id ?? undefined,
-  }))
-
-  const conceptSchema = (conceptTypesRes.data ?? []).map(ct => ({
-    id: ct.id,
-    name: ct.name,
-    description: ct.description ?? undefined,
-    fields: (ct.schema_json as any)?.fields ?? [],
-  }))
-
-  const graphNodes = (nodesRes.data ?? []).map(n => {
-    const props = (n.properties_json ?? {}) as Record<string, any>
-    return {
-      id: n.id,
-      type: 'circle',
-      position: { x: n.position_x ?? 0, y: n.position_y ?? 0 },
-      data: {
-        label: n.title,
-        entityType: props.entityType ?? 'Character',
-        typeId: n.node_type_id,
-        fields: props.fields ?? {},
-        description: props.description ?? '',
-        color: props.color ?? undefined,
-        sizeLevel: props.sizeLevel ?? 3,
-        concepts: props.concepts ?? undefined,
-      },
-    }
-  })
-
-  const graphEdges = (relsRes.data ?? []).map(r => {
-    const props = (r.properties_json ?? {}) as Record<string, any>
-    return {
-      id: r.id,
-      source: r.source_node_id,
-      target: r.target_node_id,
-      label: props.label ?? undefined,
-      type: 'relationship',
-      data: {
-        labelT: props.labelT ?? 0.5,
-        color: props.color ?? undefined,
-        schemaColor: props.schemaColor ?? undefined,
-        relationshipTypeId: r.relationship_type_id,
-        description: props.description ?? undefined,
-        whyItMatters: props.whyItMatters ?? undefined,
-      },
-      style: props.schemaColor
-        ? { stroke: props.schemaColor, strokeWidth: 2 }
-        : props.color
-          ? { stroke: props.color, strokeWidth: 2 }
-          : undefined,
-    }
-  })
-
-  return {
-    id: projectId,
-    name: (await db.from('projects').select('name').eq('id', projectId).single()).data?.name ?? 'Project',
-    createdAt: new Date().toISOString(),
-    updatedAt: new Date().toISOString(),
-    graph: { nodes: graphNodes, edges: graphEdges },
-    entitySchema,
-    relSchema,
-    conceptSchema,
-  }
 }
