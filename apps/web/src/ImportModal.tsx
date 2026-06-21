@@ -126,8 +126,8 @@ export function ImportModal({ currentProject, onConfirm, onCancel }: Props) {
               const preview = buildContentPreview(step.content.data)
               setStep({ kind: 'mode', content: step.content, preview })
             }} style={cancelBtn}>Back</button>
-            <button onClick={() => {
-              const report = onConfirm({ kind: 'merge', data: step.content.data })
+            <button onClick={async () => {
+              const report = await onConfirm({ kind: 'merge', data: step.content.data })
               if (report) setStep({ kind: 'report', report })
             }} style={mergeBtn}>Merge</button>
           </div>

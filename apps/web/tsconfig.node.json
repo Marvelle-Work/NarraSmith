@@ -6,7 +6,8 @@
     "module": "ESNext",
     "moduleResolution": "bundler",
     "isolatedModules": true,
-    "moduleDetection": "force"
+    "moduleDetection": "force",
+    "skipLibCheck": true
   },
   "include": ["vite.config.ts"]
 }
