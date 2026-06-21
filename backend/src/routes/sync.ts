@@ -69,6 +69,14 @@ type SyncBody = {
       isBlock?: boolean
     }>
   }>
+  assets?: Array<{
+    id: string
+    title: string
+    entries?: unknown[]
+    linkedEntityIds?: string[]
+    isPinnedOnCanvas?: boolean
+    position?: { x: number; y: number }
+  }>
   version: number
 }
 
@@ -78,7 +86,7 @@ export default async function syncRoutes(app: FastifyInstance) {
     Body: SyncBody
   }>('/sync', async (req, reply) => {
     const { projectId } = req.params
-    const { graph, entitySchema, relSchema, conceptSchema, version } = req.body
+    const { graph, entitySchema, relSchema, conceptSchema, assets, version } = req.body
 
     // ── Optimistic concurrency check ─────────────────────────────────
     const { data: project } = await db
@@ -101,12 +109,14 @@ export default async function syncRoutes(app: FastifyInstance) {
       existingRelTypes,
       existingRels,
       existingConcepts,
+      existingAssetNodes,
     ] = await Promise.all([
       db.from('node_types').select('id, client_id').eq('project_id', projectId),
       db.from('nodes').select('id, client_id').eq('project_id', projectId),
       db.from('relationship_types').select('id, client_id').eq('project_id', projectId),
       db.from('relationships').select('id, client_id').eq('project_id', projectId),
       db.from('concept_types').select('id, client_id').eq('project_id', projectId),
+      db.from('asset_nodes').select('id, client_id').eq('project_id', projectId),
     ])
 
     const existingNodeTypeByClientId = new Map(
@@ -123,6 +133,9 @@ export default async function syncRoutes(app: FastifyInstance) {
     )
     const existingConceptByClientId = new Map(
       (existingConcepts.data ?? []).map(r => [r.client_id, r.id]),
+    )
+    const existingAssetNodeByClientId = new Map(
+      (existingAssetNodes.data ?? []).map(r => [r.client_id, r.id]),
     )
 
     try {
@@ -196,6 +209,28 @@ export default async function syncRoutes(app: FastifyInstance) {
           .upsert(rows, { onConflict: 'project_id,client_id' })
 
         if (error) throw new Error(`concept_types upsert failed: ${error.message}`)
+      }
+
+      // ── 3b. Upsert asset_nodes ─────────────────────────────────────
+      if (assets && assets.length > 0) {
+        const rows = assets.map(a => ({
+          id: existingAssetNodeByClientId.get(a.id) ?? crypto.randomUUID(),
+          client_id: a.id,
+          project_id: projectId,
+          title: a.title,
+          entries: (a.entries ?? []) as unknown as Json,
+          linked_entity_ids: (a.linkedEntityIds ?? []) as unknown as Json,
+          is_pinned_on_canvas: a.isPinnedOnCanvas ?? false,
+          position_x: a.position?.x ?? null,
+          position_y: a.position?.y ?? null,
+          updated_at: new Date().toISOString(),
+        }))
+
+        const { error } = await db
+          .from('asset_nodes')
+          .upsert(rows, { onConflict: 'project_id,client_id' })
+
+        if (error) throw new Error(`asset_nodes upsert failed: ${error.message}`)
       }
 
       // ── 4. Resolve parent_id references for types ────────────────────
@@ -310,6 +345,7 @@ export default async function syncRoutes(app: FastifyInstance) {
       const incomingNodeTypeClientIds = new Set(entitySchema.map(s => s.id))
       const incomingRelTypeClientIds = new Set(relSchema.map(s => s.id))
       const incomingConceptClientIds = new Set(conceptSchema.map(s => s.id))
+      const incomingAssetClientIds = new Set((assets ?? []).map(a => a.id))
 
       const relsToDelete = [...existingRelByClientId.entries()]
         .filter(([cid]) => !incomingRelClientIds.has(cid))
@@ -326,6 +362,9 @@ export default async function syncRoutes(app: FastifyInstance) {
       const conceptsToDelete = [...existingConceptByClientId.entries()]
         .filter(([cid]) => !incomingConceptClientIds.has(cid))
         .map(([, uuid]) => uuid)
+      const assetNodesToDelete = [...existingAssetNodeByClientId.entries()]
+        .filter(([cid]) => !incomingAssetClientIds.has(cid))
+        .map(([, uuid]) => uuid)
 
       if (relsToDelete.length > 0) {
         await db.from('relationships').delete().in('id', relsToDelete)
@@ -341,6 +380,9 @@ export default async function syncRoutes(app: FastifyInstance) {
       }
       if (conceptsToDelete.length > 0) {
         await db.from('concept_types').delete().in('id', conceptsToDelete)
+      }
+      if (assetNodesToDelete.length > 0) {
+        await db.from('asset_nodes').delete().in('id', assetNodesToDelete)
       }
 
       // ── 8. Rebuild snapshot and update project ───────────────────────

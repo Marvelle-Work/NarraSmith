@@ -288,6 +288,7 @@ export function importProject(data: NarrasmithExport, store: ProjectStore): Proj
     entitySchema: data.entitySchema,
     relSchema: data.relationshipSchema,
     conceptSchema: data.conceptSchema,
+    assets: (data as any).assets ?? [],
   }
 
   const next: ProjectStore = {

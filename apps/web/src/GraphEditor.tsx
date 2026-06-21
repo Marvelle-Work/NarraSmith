@@ -29,6 +29,12 @@ import { DEFAULT_CONCEPT_SCHEMAS, type ConceptSchemaType } from './conceptSchema
 import { ConceptObjectEditor } from './ConceptObjectEditor'
 import { ConceptSchemaEditorPanel } from './ConceptSchemaEditorPanel'
 import { WorldIndexPanel } from './WorldIndexPanel'
+import { AssetNode } from './AssetNode'
+import { AssetEditor } from './AssetEditor'
+import { AssetIndexPanel } from './AssetIndexPanel'
+import { TetherEdge } from './TetherEdge'
+import type { AssetData, AssetNodeData } from './types'
+import { isUrl } from './types'
 import {
   loadProjectStore, saveProjectStore, getActiveProject,
   type ProjectStore,
@@ -39,10 +45,10 @@ import {
 import { ImportModal, type ImportAction } from './ImportModal'
 import { ExportModal } from './ExportModal'
 import { useAutoSave } from './hooks/useAutoSave'
-import { getProjectData } from './api/projects'
+import { getProjectData, updateProject } from './api/projects'
 
-const nodeTypes = { circle: CircleNode }
-const edgeTypes = { relationship: RelationshipEdge }
+const nodeTypes = { circle: CircleNode, asset: AssetNode }
+const edgeTypes = { relationship: RelationshipEdge, tether: TetherEdge }
 
 const UI_MODE_KEY = 'narrasmith-ui-mode'
 type UIMode = 'story' | 'system'
@@ -133,6 +139,7 @@ export function GraphEditor({ projectId, onBackToDashboard }: GraphEditorProps) 
   const [conceptSchema, setConceptSchema] = useState<ConceptSchemaType[]>(
     () => activeProject.conceptSchema ?? DEFAULT_CONCEPT_SCHEMAS,
   )
+  const [assets, setAssets] = useState<AssetData[]>(() => activeProject.assets ?? [])
   const [rootNodeId, setRootNodeId] = useState<string | null>(
     () => (activeProject.graph as any).rootNodeId ?? null,
   )
@@ -171,6 +178,8 @@ export function GraphEditor({ projectId, onBackToDashboard }: GraphEditorProps) 
             setSchemaTypes(cloudData.entitySchema)
             setRelTypes(cloudData.relSchema)
             setConceptSchema(cloudData.conceptSchema ?? [])
+            setAssets(cloudData.assets ?? [])
+            setProjectName(cloudData.name)
             setRootNodeId((cloudData.graph as any).rootNodeId ?? null)
             storeRef.current.projects[projectId] = cloudData
             saveProjectStore(storeRef.current)
@@ -195,6 +204,11 @@ export function GraphEditor({ projectId, onBackToDashboard }: GraphEditorProps) 
   const [showIndex, setShowIndex]                 = useState(false)
   const [showImport, setShowImport]                = useState(false)
   const [exportPayload, setExportPayload]         = useState<{ json: string; fileName: string } | null>(null)
+  const [showProjectMenu, setShowProjectMenu]     = useState(false)
+  const [showHamburger, setShowHamburger]          = useState(false)
+  const [showNewAsset, setShowNewAsset]             = useState(false)
+  const [showAssetIndex, setShowAssetIndex]         = useState(false)
+  const [projectName, setProjectName]             = useState(() => activeProject.name)
 
   const [mode, setMode] = useState<UIMode>(
     () => (localStorage.getItem(UI_MODE_KEY) as UIMode | null) ?? 'story',
@@ -228,6 +242,7 @@ export function GraphEditor({ projectId, onBackToDashboard }: GraphEditorProps) 
       setSchemaTypes(project.entitySchema)
       setRelTypes(project.relSchema)
       setConceptSchema(project.conceptSchema ?? [])
+      setAssets(project.assets ?? [])
       setSelectedNodeId(null)
       setSelectedEdgeId(null)
       setShowImport(false)
@@ -242,6 +257,7 @@ export function GraphEditor({ projectId, onBackToDashboard }: GraphEditorProps) 
     setSchemaTypes(merged.entitySchema)
     setRelTypes(merged.relSchema)
     setConceptSchema(merged.conceptSchema ?? [])
+    setAssets(merged.assets ?? [])
     setSelectedNodeId(null)
     setSelectedEdgeId(null)
     return report
@@ -259,17 +275,31 @@ export function GraphEditor({ projectId, onBackToDashboard }: GraphEditorProps) 
         ...current.projects,
         [current.activeProjectId]: {
           ...getActiveProject(current),
+          name: projectName,
           graph: { nodes: nodes as any, edges: edges as any, rootNodeId: rootNodeId ?? undefined },
           entitySchema: schemaTypes,
           relSchema: relTypes,
           conceptSchema,
+          assets,
           updatedAt: new Date().toISOString(),
         },
       },
     }
     storeRef.current = next
     autoSave(next)
-  }, [nodes, edges, schemaTypes, relTypes, conceptSchema, rootNodeId]) // eslint-disable-line react-hooks/exhaustive-deps
+  }, [nodes, edges, schemaTypes, relTypes, conceptSchema, assets, rootNodeId, projectName]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  // ── Sync project name to cloud on change ──────────────────────────────
+  const initialNameRef = useRef(projectName)
+  useEffect(() => {
+    if (!cloudLoadedRef.current) return
+    if (projectName === initialNameRef.current) return
+    initialNameRef.current = projectName
+    const timer = setTimeout(() => {
+      updateProject(projectId, { name: projectName }).catch(() => {})
+    }, 1000)
+    return () => clearTimeout(timer)
+  }, [projectName, projectId])
 
   // ── Re-sync schemaColor when relationship schema changes ──────────────
   useEffect(() => {
@@ -303,6 +333,13 @@ export function GraphEditor({ projectId, onBackToDashboard }: GraphEditorProps) 
         .map(e => ({ label: typeof e.label === 'string' ? e.label : '', peer: name(e.source) })),
     }
   }, [selectedNodeId, edges, nodes])
+
+  const isAssetNode = selectedNode?.type === 'asset'
+  const selectedAsset = useMemo(() => {
+    if (!isAssetNode || !selectedNode) return null
+    const assetId = (selectedNode.data as unknown as AssetNodeData).assetId
+    return assets.find(a => a.id === assetId) ?? null
+  }, [isAssetNode, selectedNode, assets])
 
   const resolvedFields = useMemo(
     () => selectedNode?.data.typeId ? resolveFields(selectedNode.data.typeId, schemaTypes) : [],
@@ -450,6 +487,102 @@ export function GraphEditor({ projectId, onBackToDashboard }: GraphEditorProps) 
     ))
   }, [selectedEdgeId, setEdges])
 
+  // ── Asset management ──────────────────────────────────────────────────
+  const addAsset = useCallback((asset: AssetData) => {
+    setAssets(prev => [...prev, asset])
+  }, [])
+
+  const updateAsset = useCallback((asset: AssetData) => {
+    setAssets(prev => prev.map(a => a.id === asset.id ? asset : a))
+    setNodes(nds => nds.map(n => {
+      if (n.type !== 'asset' || (n.data as unknown as AssetNodeData).assetId !== asset.id) return n
+      const summary = asset.entries.slice(0, 3).map(e => e.label || e.type).join(', ')
+      return { ...n, data: { assetId: asset.id, title: asset.title, entryCount: asset.entries.length, entrySummary: summary } as any }
+    }))
+  }, [setNodes])
+
+  const removeAsset = useCallback((assetId: string) => {
+    setAssets(prev => prev.filter(a => a.id !== assetId))
+    setNodes(nds => nds.filter(n => !(n.type === 'asset' && (n.data as unknown as AssetNodeData).assetId === assetId)))
+    setEdges(eds => eds.filter(e => !e.id.startsWith(`tether-${assetId}-`)))
+  }, [setNodes, setEdges])
+
+  const toggleAssetPin = useCallback((assetId: string) => {
+    setAssets(prev => prev.map(a => {
+      if (a.id !== assetId) return a
+      const nowPinned = !a.isPinnedOnCanvas
+      if (nowPinned) {
+        const linkedNode = nodes.find(n => a.linkedEntityIds.includes(n.id))
+        const pos = linkedNode
+          ? { x: linkedNode.position.x + 150, y: linkedNode.position.y - 50 }
+          : a.position ?? { x: 200, y: 200 }
+        const summary = a.entries.slice(0, 3).map(e => e.label || e.type).join(', ')
+        const assetNodeData: AssetNodeData = {
+          assetId: a.id, title: a.title,
+          entryCount: a.entries.length, entrySummary: summary,
+        }
+        setNodes(nds => [...nds, {
+          id: `asset-node-${a.id}`,
+          type: 'asset',
+          position: pos,
+          data: assetNodeData,
+        } as any])
+        const tetherEdges: Edge[] = a.linkedEntityIds
+          .filter(entityId => nodes.some(n => n.id === entityId))
+          .map(entityId => ({
+            id: `tether-${a.id}-${entityId}`,
+            source: `asset-node-${a.id}`,
+            target: entityId,
+            type: 'tether',
+          }))
+        setEdges(eds => [...eds, ...tetherEdges])
+        return { ...a, isPinnedOnCanvas: true, position: pos }
+      } else {
+        setNodes(nds => nds.filter(n => n.id !== `asset-node-${a.id}`))
+        setEdges(eds => eds.filter(e => !e.id.startsWith(`tether-${a.id}-`)))
+        return { ...a, isPinnedOnCanvas: false }
+      }
+    }))
+  }, [nodes, setNodes, setEdges])
+
+  const linkAssetToEntity = useCallback((assetId: string, entityId: string) => {
+    setAssets(prev => prev.map(a =>
+      a.id === assetId && !a.linkedEntityIds.includes(entityId)
+        ? { ...a, linkedEntityIds: [...a.linkedEntityIds, entityId] }
+        : a,
+    ))
+  }, [])
+
+  const unlinkAssetFromEntity = useCallback((assetId: string, entityId: string) => {
+    setAssets(prev => prev.map(a =>
+      a.id === assetId
+        ? { ...a, linkedEntityIds: a.linkedEntityIds.filter(id => id !== entityId) }
+        : a,
+    ))
+  }, [])
+
+  const createStandaloneAsset = useCallback((asset: AssetData) => {
+    const pos = screenToFlowPosition({ x: window.innerWidth / 2, y: window.innerHeight / 2 })
+    const pinned = { ...asset, isPinnedOnCanvas: true, position: pos }
+    setAssets(prev => [...prev, pinned])
+    const summary = asset.entries.slice(0, 3).map(e => e.label || e.type).join(', ')
+    setNodes(nds => [...nds, {
+      id: `asset-node-${asset.id}`,
+      type: 'asset',
+      position: pos,
+      data: { assetId: asset.id, title: asset.title, entryCount: asset.entries.length, entrySummary: summary },
+    } as any])
+    setShowNewAsset(false)
+  }, [screenToFlowPosition, setNodes])
+
+  // Close dropdowns on any outside click
+  useEffect(() => {
+    if (!showProjectMenu && !showHamburger) return
+    const close = () => { setShowProjectMenu(false); setShowHamburger(false) }
+    const timer = setTimeout(() => document.addEventListener('click', close), 0)
+    return () => { clearTimeout(timer); document.removeEventListener('click', close) }
+  }, [showProjectMenu, showHamburger])
+
   const pendingSource = pendingConn ? nodes.find(n => n.id === pendingConn.source)?.data.label ?? '' : ''
   const pendingTarget = pendingConn ? nodes.find(n => n.id === pendingConn.target)?.data.label ?? '' : ''
 
@@ -491,53 +624,101 @@ export function GraphEditor({ projectId, onBackToDashboard }: GraphEditorProps) 
         </div>
 
         <div style={{ position: 'absolute', top: 12, left: 12, zIndex: 10, display: 'flex', gap: 8, alignItems: 'center' }}>
-          <button onClick={onBackToDashboard} style={backBtn}>
-            &larr; Projects
-          </button>
-
-          <button onClick={createEntityAtCenter} style={toolbarBtn}>
-            {story ? '+ New' : '+ New Entity'}
-          </button>
-
-          {/* Schema buttons visible in system mode only */}
-          {!story && (
-            <>
-              <button
-                onClick={() => { setShowSchema(s => !s); setShowRelSchema(false); setShowConceptSchema(false) }}
-                style={{ ...toolbarBtn, background: showSchema ? '#6366f1' : '#fafafa', color: showSchema ? '#fff' : '#18181b', border: '1px solid #e4e4e7' }}
-              >
-                Entity Schema
-              </button>
-              <button
-                onClick={() => { setShowRelSchema(s => !s); setShowSchema(false); setShowConceptSchema(false) }}
-                style={{ ...toolbarBtn, background: showRelSchema ? '#0ea5e9' : '#fafafa', color: showRelSchema ? '#fff' : '#18181b', border: '1px solid #e4e4e7' }}
-              >
-                Rel. Schema
-              </button>
-              <button
-                onClick={() => { setShowConceptSchema(s => !s); setShowSchema(false); setShowRelSchema(false) }}
-                style={{ ...toolbarBtn, background: showConceptSchema ? '#a855f7' : '#fafafa', color: showConceptSchema ? '#fff' : '#18181b', border: '1px solid #e4e4e7' }}
-              >
-                Concepts
-              </button>
-            </>
-          )}
-
-          {!story && <span style={{ fontSize: 12, color: '#71717a' }}>double-click · Enter</span>}
-
-          {story && (
-            <span
-              title={nodes.length > 20
-                ? 'Large graphs can be hard to read. Consider breaking this into sub-worlds.'
-                : 'Aim for a graph readable in 30–60 seconds'}
+          {/* Project dropdown */}
+          <div style={{ position: 'relative' }}>
+            <button
+              onClick={e => { e.stopPropagation(); setShowProjectMenu(s => !s); setShowHamburger(false) }}
               style={{
-                fontSize: 11,
-                color: nodes.length > 20 ? '#f59e0b' : '#a1a1aa',
+                ...backBtn, display: 'flex', alignItems: 'center', gap: 6,
+                background: showProjectMenu ? '#18181b' : '#fff',
+                color: showProjectMenu ? '#fff' : '#52525b',
               }}
             >
-              {nodes.length > 20 ? '⚠ ' : ''}{nodes.length} {nodes.length === 1 ? 'entity' : 'entities'}
-            </span>
-          )}
+              <span style={{ fontWeight: 700, maxWidth: 140, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                {projectName}
+              </span>
+              <span style={{ fontSize: 9 }}>&#9660;</span>
+            </button>
+            {showProjectMenu && (
+              <div style={dropdownMenu} onClick={e => e.stopPropagation()}>
+                <div style={{ padding: '8px 10px' }}>
+                  <span style={{ fontSize: 10, fontWeight: 700, color: '#a1a1aa', textTransform: 'uppercase', letterSpacing: 0.5 }}>
+                    Project Name
+                  </span>
+                  <input
+                    value={projectName}
+                    onChange={e => setProjectName(e.target.value)}
+                    style={{ ...inputStyle, marginTop: 4, fontSize: 13 }}
+                    autoFocus
+                  />
+                </div>
+                <div style={dropdownDivider} />
+                <button
+                  onClick={() => { setShowProjectMenu(false); onBackToDashboard() }}
+                  style={dropdownItem}
+                >
+                  Back to Dashboard
+                </button>
+              </div>
+            )}
+          </div>
+
+          {/* Hamburger menu */}
+          <div style={{ position: 'relative' }}>
+            <button
+              onClick={e => { e.stopPropagation(); setShowHamburger(s => !s); setShowProjectMenu(false) }}
+              style={{
+                ...toolbarBtn, padding: '8px 10px', fontSize: 15, lineHeight: 1,
+                background: showHamburger ? '#6366f1' : '#18181b',
+              }}
+              title="Tools"
+            >
+              +
+            </button>
+            {showHamburger && (
+              <div style={dropdownMenu} onClick={e => e.stopPropagation()}>
+                <button onClick={() => { createEntityAtCenter(); setShowHamburger(false) }} style={dropdownItem}>
+                  New Entity
+                </button>
+                <button onClick={() => { setShowNewAsset(true); setShowHamburger(false) }} style={dropdownItem}>
+                  New Asset
+                </button>
+                <div style={dropdownDivider} />
+                <button onClick={() => { setShowSchema(s => !s); setShowRelSchema(false); setShowConceptSchema(false); setShowHamburger(false) }} style={{
+                  ...dropdownItem, color: showSchema ? '#6366f1' : '#18181b',
+                }}>
+                  Entity Schema
+                </button>
+                <button onClick={() => { setShowRelSchema(s => !s); setShowSchema(false); setShowConceptSchema(false); setShowHamburger(false) }} style={{
+                  ...dropdownItem, color: showRelSchema ? '#0ea5e9' : '#18181b',
+                }}>
+                  Rel. Schema
+                </button>
+                <button onClick={() => { setShowConceptSchema(s => !s); setShowSchema(false); setShowRelSchema(false); setShowHamburger(false) }} style={{
+                  ...dropdownItem, color: showConceptSchema ? '#a855f7' : '#18181b',
+                }}>
+                  Concepts
+                </button>
+                <button onClick={() => { setShowAssetIndex(s => !s); setShowHamburger(false) }} style={{
+                  ...dropdownItem, color: showAssetIndex ? '#6366f1' : '#18181b',
+                }}>
+                  Assets
+                </button>
+              </div>
+            )}
+          </div>
+
+          <span
+            title={nodes.length > 20
+              ? 'Large graphs can be hard to read. Consider breaking this into sub-worlds.'
+              : 'Aim for a graph readable in 30–60 seconds'}
+            style={{
+              fontSize: 11,
+              color: nodes.length > 20 ? '#f59e0b' : '#a1a1aa',
+            }}
+          >
+            {nodes.length > 20 ? '! ' : ''}{nodes.length} {nodes.length === 1 ? 'entity' : 'entities'}
+          </span>
 
           <button
             onClick={toggleMode}
@@ -551,7 +732,7 @@ export function GraphEditor({ projectId, onBackToDashboard }: GraphEditorProps) 
               transition: 'all 0.15s',
             }}
           >
-            {story ? '⚙' : '⚙ System'}
+            {story ? 'System' : 'System'}
           </button>
         </div>
 
@@ -578,13 +759,25 @@ export function GraphEditor({ projectId, onBackToDashboard }: GraphEditorProps) 
           display: 'flex', flexDirection: 'column', gap: 18, overflowY: 'auto',
           flexShrink: 0,
         }}>
-          {selectedNode && (story
+          {selectedNode && isAssetNode && selectedAsset && (
+            <AssetInspectorPanel
+              asset={selectedAsset}
+              nodes={nodes}
+              onUpdate={updateAsset}
+              onRemove={removeAsset}
+              onTogglePin={toggleAssetPin}
+              onLink={linkAssetToEntity}
+              onUnlink={unlinkAssetFromEntity}
+            />
+          )}
+          {selectedNode && !isAssetNode && (story
             ? <StoryEntityPanel
                 node={selectedNode} schemaTypes={schemaTypes} conceptSchemas={conceptSchema}
                 resolvedFields={resolvedFields} relationships={selectedRelationships}
                 onUpdate={updateNode}
                 isRoot={selectedNode.id === rootNodeId}
                 onToggleRoot={() => setRootNodeId(prev => prev === selectedNode.id ? null : selectedNode.id)}
+                assets={assets} onAddAsset={addAsset} onUpdateAsset={updateAsset} onLinkAsset={linkAssetToEntity} onUnlinkAsset={unlinkAssetFromEntity} onToggleAssetPin={toggleAssetPin}
               />
             : <SystemEntityPanel
                 node={selectedNode} schemaTypes={schemaTypes} conceptSchemas={conceptSchema}
@@ -592,6 +785,7 @@ export function GraphEditor({ projectId, onBackToDashboard }: GraphEditorProps) 
                 onUpdate={updateNode}
                 isRoot={selectedNode.id === rootNodeId}
                 onToggleRoot={() => setRootNodeId(prev => prev === selectedNode.id ? null : selectedNode.id)}
+                assets={assets} onAddAsset={addAsset} onUpdateAsset={updateAsset} onLinkAsset={linkAssetToEntity} onUnlinkAsset={unlinkAssetFromEntity} onToggleAssetPin={toggleAssetPin}
               />
           )}
           {selectedEdge && (story
@@ -630,11 +824,21 @@ export function GraphEditor({ projectId, onBackToDashboard }: GraphEditorProps) 
           onClose={() => setShowConceptSchema(false)}
         />
       )}
+      {showAssetIndex && (
+        <AssetIndexPanel
+          assets={assets} nodes={nodes}
+          onUpdate={updateAsset}
+          onRemove={removeAsset}
+          onTogglePin={toggleAssetPin}
+          onClose={() => setShowAssetIndex(false)}
+        />
+      )}
       {showIndex && (
         <WorldIndexPanel
-          nodes={nodes} edges={edges} conceptSchemas={conceptSchema}
+          nodes={nodes} edges={edges} conceptSchemas={conceptSchema} assets={assets}
           onSelectNode={id => { setSelectedNodeId(id); setSelectedEdgeId(null) }}
           onSelectEdge={id => { setSelectedEdgeId(id); setSelectedNodeId(null) }}
+          onToggleAssetPin={toggleAssetPin}
           onClose={() => setShowIndex(false)}
         />
       )}
@@ -660,6 +864,101 @@ export function GraphEditor({ projectId, onBackToDashboard }: GraphEditorProps) 
           onClose={() => setExportPayload(null)}
         />
       )}
+      {showNewAsset && (
+        <NewAssetModal
+          onAdd={createStandaloneAsset}
+          onCancel={() => setShowNewAsset(false)}
+        />
+      )}
+    </div>
+  )
+}
+
+// ── New Asset Modal ──────────────────────────────────────────────────────
+
+const ASSET_TEMPLATES: { label: string; desc: string; entries: Omit<import('./types').AssetEntry, 'id'>[] }[] = [
+  { label: 'Music Pack', desc: '3 music entries', entries: [
+    { type: 'music', label: 'Theme', value: '', isLinkified: false },
+    { type: 'music', label: 'Battle', value: '', isLinkified: false },
+    { type: 'music', label: 'Ambient', value: '', isLinkified: false },
+  ]},
+  { label: 'Image Pack', desc: '3 image entries', entries: [
+    { type: 'image', label: 'Portrait', value: '', isLinkified: false },
+    { type: 'image', label: 'Scene', value: '', isLinkified: false },
+    { type: 'image', label: 'Map', value: '', isLinkified: false },
+  ]},
+  { label: 'Document Pack', desc: '2 doc entries', entries: [
+    { type: 'document', label: 'Lore', value: '', isLinkified: false },
+    { type: 'document', label: 'Notes', value: '', isLinkified: false },
+  ]},
+  { label: 'Mixed', desc: 'image + link + notes', entries: [
+    { type: 'image', label: 'Image', value: '', isLinkified: false },
+    { type: 'link', label: 'Reference', value: '', isLinkified: false },
+    { type: 'custom', label: 'Notes', value: '', isLinkified: false },
+  ]},
+  { label: 'Custom', desc: 'empty container', entries: [] },
+]
+
+function NewAssetModal({ onAdd, onCancel }: { onAdd: (a: AssetData) => void; onCancel: () => void }) {
+  const [title, setTitle] = useState('')
+  const [selectedTemplate, setSelectedTemplate] = useState(0)
+
+  const handleCreate = () => {
+    const tmpl = ASSET_TEMPLATES[selectedTemplate]
+    const eid = () => `entry-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`
+    onAdd({
+      id: `asset-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+      title: title.trim() || tmpl.label,
+      linkedEntityIds: [],
+      isPinnedOnCanvas: false,
+      entries: tmpl.entries.map(e => ({ ...e, id: eid() })),
+    })
+  }
+
+  return (
+    <div style={{
+      position: 'fixed', inset: 0, zIndex: 100,
+      display: 'flex', alignItems: 'center', justifyContent: 'center',
+      background: 'rgba(0,0,0,0.4)',
+    }} onClick={onCancel}>
+      <div onClick={e => e.stopPropagation()} style={{
+        background: '#fff', borderRadius: 12, padding: '24px 28px',
+        width: 380, boxShadow: '0 8px 32px rgba(0,0,0,0.18)',
+        fontFamily: 'system-ui, sans-serif',
+      }}>
+        <h2 style={{ margin: '0 0 16px', fontSize: 16, fontWeight: 700, color: '#18181b' }}>New Asset Container</h2>
+        <input value={title} onChange={e => setTitle(e.target.value)} placeholder="Title (optional)" style={{ ...inputStyle, marginBottom: 14 }} autoFocus />
+        <span style={{ fontSize: 11, fontWeight: 700, color: '#52525b', textTransform: 'uppercase', letterSpacing: 0.5 }}>
+          Template
+        </span>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 6, marginTop: 8 }}>
+          {ASSET_TEMPLATES.map((tmpl, i) => (
+            <button
+              key={tmpl.label}
+              onClick={() => setSelectedTemplate(i)}
+              style={{
+                padding: '8px 12px', borderRadius: 6, textAlign: 'left',
+                border: `1.5px solid ${selectedTemplate === i ? '#6366f1' : '#e4e4e7'}`,
+                background: selectedTemplate === i ? '#ede9fe' : '#fff',
+                color: '#18181b', fontWeight: 600, fontSize: 13, cursor: 'pointer',
+              }}
+            >
+              {tmpl.label}
+              <span style={{ color: '#a1a1aa', fontWeight: 400, marginLeft: 8, fontSize: 11 }}>{tmpl.desc}</span>
+            </button>
+          ))}
+        </div>
+        <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end', marginTop: 18 }}>
+          <button onClick={onCancel} style={{
+            padding: '7px 14px', borderRadius: 6, border: '1px solid #d4d4d8',
+            background: '#fff', color: '#52525b', fontWeight: 600, fontSize: 13, cursor: 'pointer',
+          }}>Cancel</button>
+          <button onClick={handleCreate} style={{
+            padding: '7px 14px', borderRadius: 6, border: 'none',
+            background: '#6366f1', color: '#fff', fontWeight: 600, fontSize: 13, cursor: 'pointer',
+          }}>Create</button>
+        </div>
+      </div>
     </div>
   )
 }
@@ -677,6 +976,12 @@ type EntityPanelProps = {
   onUpdate: (u: Partial<NodeData>) => void
   isRoot: boolean
   onToggleRoot: () => void
+  assets: AssetData[]
+  onAddAsset: (asset: AssetData) => void
+  onUpdateAsset: (asset: AssetData) => void
+  onLinkAsset: (assetId: string, entityId: string) => void
+  onUnlinkAsset: (assetId: string, entityId: string) => void
+  onToggleAssetPin: (assetId: string) => void
 }
 
 type StoryEdgePanelProps = {
@@ -696,7 +1001,7 @@ type SystemEdgePanelProps = StoryEdgePanelProps & {
 
 // ── Story-mode entity panel ───────────────────────────────────────────────
 
-function StoryEntityPanel({ node, schemaTypes, conceptSchemas, resolvedFields, relationships, onUpdate, isRoot, onToggleRoot }: EntityPanelProps) {
+function StoryEntityPanel({ node, schemaTypes, conceptSchemas, resolvedFields, relationships, onUpdate, isRoot, onToggleRoot, assets, onAddAsset, onUpdateAsset, onLinkAsset, onUnlinkAsset, onToggleAssetPin }: EntityPanelProps) {
   const entitySchemaType = schemaTypes.find(st => st.id === node.data.typeId)
   const allowedConceptIds = entitySchemaType?.conceptSchemaIds ?? []
   const existingConceptIds = Object.keys(node.data.concepts ?? {})
@@ -807,6 +1112,18 @@ function StoryEntityPanel({ node, schemaTypes, conceptSchemas, resolvedFields, r
         <ConnectionsList relationships={relationships} />
       </PanelField>
 
+      <PanelField label="Assets">
+        <AssetEditor
+          assets={assets}
+          entityId={node.id}
+          onAdd={onAddAsset}
+          onUpdate={onUpdateAsset}
+          onLink={onLinkAsset}
+          onUnlink={onUnlinkAsset}
+          onTogglePin={onToggleAssetPin}
+        />
+      </PanelField>
+
       <button onClick={onToggleRoot} style={rootToggleBtn(isRoot)}>
         {isRoot ? '◆ Root Node' : '◇ Set as Root'}
       </button>
@@ -816,7 +1133,7 @@ function StoryEntityPanel({ node, schemaTypes, conceptSchemas, resolvedFields, r
 
 // ── System-mode entity panel ──────────────────────────────────────────────
 
-function SystemEntityPanel({ node, schemaTypes, conceptSchemas, resolvedFields, relationships, onUpdate, isRoot, onToggleRoot }: EntityPanelProps) {
+function SystemEntityPanel({ node, schemaTypes, conceptSchemas, resolvedFields, relationships, onUpdate, isRoot, onToggleRoot, assets, onAddAsset, onUpdateAsset, onLinkAsset, onUnlinkAsset, onToggleAssetPin }: EntityPanelProps) {
   const entitySchemaType = schemaTypes.find(st => st.id === node.data.typeId)
   const allowedConceptIds = entitySchemaType?.conceptSchemaIds ?? []
   const existingConceptIds = Object.keys(node.data.concepts ?? {})
@@ -942,6 +1259,18 @@ function SystemEntityPanel({ node, schemaTypes, conceptSchemas, resolvedFields, 
         <ConnectionsList relationships={relationships} />
       </PanelField>
 
+      <PanelField label="Assets">
+        <AssetEditor
+          assets={assets}
+          entityId={node.id}
+          onAdd={onAddAsset}
+          onUpdate={onUpdateAsset}
+          onLink={onLinkAsset}
+          onUnlink={onUnlinkAsset}
+          onTogglePin={onToggleAssetPin}
+        />
+      </PanelField>
+
       <button onClick={onToggleRoot} style={rootToggleBtn(isRoot)}>
         {isRoot ? '◆ Root Node' : '◇ Set as Root'}
       </button>
@@ -1065,6 +1394,162 @@ function SystemEdgePanel({ edge, nodes, relTypes, onUpdateLabel, onUpdateDescrip
   )
 }
 
+// ── Asset inspector panel ─────────────────────────────────────────────────
+
+type AssetInspectorProps = {
+  asset: AssetData
+  nodes: GraphNode[]
+  onUpdate: (a: AssetData) => void
+  onRemove: (id: string) => void
+  onTogglePin: (id: string) => void
+  onLink: (assetId: string, entityId: string) => void
+  onUnlink: (assetId: string, entityId: string) => void
+}
+
+const ENTRY_TYPES_LIST: { value: import('./types').AssetEntryType; label: string }[] = [
+  { value: 'link', label: 'Link' },
+  { value: 'image', label: 'Image' },
+  { value: 'music', label: 'Music' },
+  { value: 'document', label: 'Doc' },
+  { value: 'custom', label: 'Custom' },
+]
+
+function makeEntryId() {
+  return `entry-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`
+}
+
+function AssetInspectorPanel({ asset, nodes, onUpdate, onRemove, onTogglePin, onLink, onUnlink }: AssetInspectorProps) {
+  const [showLinkPicker, setShowLinkPicker] = useState(false)
+
+  const linkedEntities = nodes.filter(n => n.type === 'circle' && asset.linkedEntityIds.includes(n.id))
+  const unlinkableEntities = nodes.filter(n => n.type === 'circle' && !asset.linkedEntityIds.includes(n.id))
+
+  const addEntry = (type: import('./types').AssetEntryType) => {
+    onUpdate({ ...asset, entries: [...asset.entries, { id: makeEntryId(), type, label: '', value: '', isLinkified: false }] })
+  }
+
+  const updateEntry = (eid: string, updates: Partial<import('./types').AssetEntry>) => {
+    onUpdate({
+      ...asset,
+      entries: asset.entries.map(e => {
+        if (e.id !== eid) return e
+        const merged = { ...e, ...updates }
+        if ('value' in updates) merged.isLinkified = isUrl(merged.value)
+        return merged
+      }),
+    })
+  }
+
+  const removeEntry = (eid: string) => {
+    onUpdate({ ...asset, entries: asset.entries.filter(e => e.id !== eid) })
+  }
+
+  return (
+    <>
+      <h2 style={panelHeading}>Asset Container</h2>
+
+      <PanelField label="Title">
+        <input value={asset.title} onChange={e => onUpdate({ ...asset, title: e.target.value })} style={inputStyle} />
+      </PanelField>
+
+      <PanelField label={`Entries (${asset.entries.length})`}>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+          {asset.entries.map(entry => (
+            <div key={entry.id} style={{
+              padding: '6px 8px', background: '#fff',
+              border: '1px solid #e4e4e7', borderRadius: 5,
+              display: 'flex', flexDirection: 'column', gap: 4,
+            }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+                <select
+                  value={entry.type}
+                  onChange={e => updateEntry(entry.id, { type: e.target.value as import('./types').AssetEntryType })}
+                  style={{ padding: '2px 4px', fontSize: 10, border: '1px solid #d4d4d8', borderRadius: 4, background: '#fff', color: '#18181b', outline: 'none' }}
+                >
+                  {ENTRY_TYPES_LIST.map(t => <option key={t.value} value={t.value}>{t.label}</option>)}
+                </select>
+                <input
+                  value={entry.label}
+                  onChange={e => updateEntry(entry.id, { label: e.target.value })}
+                  placeholder="Label"
+                  style={{ ...inputStyle, flex: 1, fontSize: 12, padding: '4px 7px' }}
+                />
+                <button
+                  onClick={() => removeEntry(entry.id)}
+                  style={{ background: 'none', border: 'none', color: '#dc2626', cursor: 'pointer', fontSize: 12, fontWeight: 700, padding: '0 2px' }}
+                >x</button>
+              </div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+                <input
+                  value={entry.value}
+                  onChange={e => updateEntry(entry.id, { value: e.target.value })}
+                  placeholder="URL or text"
+                  style={{ ...inputStyle, flex: 1, fontSize: 12, padding: '4px 7px' }}
+                />
+                {entry.isLinkified && (
+                  <a href={entry.value} target="_blank" rel="noopener noreferrer"
+                    style={{ fontSize: 10, color: '#6366f1', whiteSpace: 'nowrap', textDecoration: 'none' }}>Open</a>
+                )}
+              </div>
+            </div>
+          ))}
+          <div style={{ display: 'flex', gap: 3, flexWrap: 'wrap' }}>
+            {ENTRY_TYPES_LIST.map(t => (
+              <button key={t.value} onClick={() => addEntry(t.value)} style={{
+                padding: '2px 6px', borderRadius: 4, fontSize: 10, fontWeight: 600,
+                border: '1px solid #e4e4e7', background: '#fff', color: '#52525b', cursor: 'pointer',
+              }}>+ {t.label}</button>
+            ))}
+          </div>
+        </div>
+      </PanelField>
+
+      <PanelField label="Linked Entities">
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+          {linkedEntities.length === 0 && <span style={{ fontSize: 13, color: '#a1a1aa' }}>None</span>}
+          {linkedEntities.map(n => (
+            <div key={n.id} style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '4px 6px', background: '#fff', border: '1px solid #e4e4e7', borderRadius: 5 }}>
+              <span style={{ fontSize: 12, fontWeight: 600, color: '#18181b', flex: 1 }}>{n.data.label}</span>
+              <button onClick={() => onUnlink(asset.id, n.id)} style={{ fontSize: 10, color: '#dc2626', background: 'none', border: 'none', cursor: 'pointer', fontWeight: 600 }}>Unlink</button>
+            </div>
+          ))}
+          {showLinkPicker ? (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 4, padding: '6px', background: '#f9fafb', borderRadius: 5, border: '1px solid #e4e4e7' }}>
+              {unlinkableEntities.length === 0
+                ? <span style={{ fontSize: 12, color: '#a1a1aa' }}>All entities linked</span>
+                : unlinkableEntities.slice(0, 10).map(n => (
+                  <button key={n.id} onClick={() => { onLink(asset.id, n.id); setShowLinkPicker(false) }} style={{
+                    padding: '4px 8px', borderRadius: 4, textAlign: 'left', border: '1px solid #e4e4e7',
+                    background: '#fff', color: '#18181b', fontSize: 12, cursor: 'pointer', fontWeight: 600,
+                  }}>{n.data.label}</button>
+                ))
+              }
+              <button onClick={() => setShowLinkPicker(false)} style={{ fontSize: 11, color: '#71717a', background: 'none', border: 'none', cursor: 'pointer', alignSelf: 'flex-end' }}>Cancel</button>
+            </div>
+          ) : (
+            <button onClick={() => setShowLinkPicker(true)} style={{
+              padding: '4px 8px', borderRadius: 5, border: '1px dashed #d4d4d8', background: '#fafafa',
+              color: '#71717a', fontWeight: 600, fontSize: 11, cursor: 'pointer', textAlign: 'center',
+            }}>+ Link Entity</button>
+          )}
+        </div>
+      </PanelField>
+
+      <button onClick={() => onTogglePin(asset.id)} style={rootToggleBtn(asset.isPinnedOnCanvas)}>
+        {asset.isPinnedOnCanvas ? 'Unpin from Canvas' : 'Pin to Canvas'}
+      </button>
+
+      <button onClick={() => onRemove(asset.id)} style={{
+        padding: '6px 12px', background: '#fff', color: '#dc2626',
+        border: '1px solid #fecaca', borderRadius: 6, cursor: 'pointer',
+        fontWeight: 600, fontSize: 12, width: '100%', transition: 'all 0.15s',
+      }}>
+        Delete Asset
+      </button>
+    </>
+  )
+}
+
 // ── Shared sub-components ─────────────────────────────────────────────────
 
 function EmphasisPicker({ value, onChange, showHint }: { value: SizeLevel; onChange: (v: SizeLevel) => void; showHint?: boolean }) {
@@ -1181,4 +1666,22 @@ const inputStyle: React.CSSProperties = {
   border: '1px solid #d4d4d8', borderRadius: 6,
   fontSize: 14, color: '#18181b', background: '#fff',
   width: '100%', boxSizing: 'border-box', outline: 'none',
+}
+
+const dropdownMenu: React.CSSProperties = {
+  position: 'absolute', top: '100%', left: 0, marginTop: 4,
+  background: '#fff', border: '1px solid #e4e4e7', borderRadius: 8,
+  boxShadow: '0 4px 16px rgba(0,0,0,0.12)', minWidth: 180,
+  zIndex: 20, overflow: 'hidden',
+}
+
+const dropdownItem: React.CSSProperties = {
+  display: 'block', width: '100%', padding: '9px 14px',
+  background: 'none', border: 'none', textAlign: 'left',
+  fontSize: 13, fontWeight: 600, color: '#18181b',
+  cursor: 'pointer',
+}
+
+const dropdownDivider: React.CSSProperties = {
+  height: 1, background: '#e4e4e7', margin: '2px 0',
 }

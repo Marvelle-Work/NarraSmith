@@ -4,13 +4,14 @@ import { db } from '../db.js'
 export async function rebuildProjectSnapshot(
   projectId: string,
 ): Promise<Record<string, unknown>> {
-  const [nodesRes, relsRes, nodeTypesRes, relTypesRes, conceptTypesRes, projectRes] =
+  const [nodesRes, relsRes, nodeTypesRes, relTypesRes, conceptTypesRes, assetNodesRes, projectRes] =
     await Promise.all([
       db.from('nodes').select('*').eq('project_id', projectId),
       db.from('relationships').select('*').eq('project_id', projectId),
       db.from('node_types').select('*').eq('project_id', projectId),
       db.from('relationship_types').select('*').eq('project_id', projectId),
       db.from('concept_types').select('*').eq('project_id', projectId),
+      db.from('asset_nodes').select('*').eq('project_id', projectId),
       db.from('projects').select('name, created_at').eq('id', projectId).single(),
     ])
 
@@ -93,6 +94,17 @@ export async function rebuildProjectSnapshot(
     }
   })
 
+  const assets = (assetNodesRes.data ?? []).map(an => ({
+    id: an.client_id,
+    title: an.title,
+    entries: an.entries ?? [],
+    linkedEntityIds: an.linked_entity_ids ?? [],
+    isPinnedOnCanvas: an.is_pinned_on_canvas,
+    ...(an.position_x != null && an.position_y != null
+      ? { position: { x: an.position_x, y: an.position_y } }
+      : {}),
+  }))
+
   const now = new Date().toISOString()
   return {
     id: projectId,
@@ -103,5 +115,6 @@ export async function rebuildProjectSnapshot(
     entitySchema,
     relSchema,
     conceptSchema,
+    assets,
   }
 }

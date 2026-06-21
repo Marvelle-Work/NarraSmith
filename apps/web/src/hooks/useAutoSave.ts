@@ -33,6 +33,7 @@ export function useAutoSave(projectId: string, delay = 2000) {
             entitySchema: data.entitySchema,
             relSchema: data.relSchema,
             conceptSchema: data.conceptSchema ?? [],
+            assets: data.assets ?? [],
           },
           versionRef.current,
         )
@@ -57,6 +58,7 @@ export function useAutoSave(projectId: string, delay = 2000) {
             entitySchema: data.entitySchema,
             relSchema: data.relSchema,
             conceptSchema: data.conceptSchema ?? [],
+            assets: data.assets ?? [],
           },
           versionRef.current,
         ).catch(() => {})

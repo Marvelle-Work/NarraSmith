@@ -258,6 +258,48 @@ export type Database = {
         }
         Relationships: []
       }
+      asset_nodes: {
+        Row: {
+          id: string
+          client_id: string
+          project_id: string
+          title: string
+          entries: Json
+          linked_entity_ids: Json
+          is_pinned_on_canvas: boolean
+          position_x: number | null
+          position_y: number | null
+          created_at: string | null
+          updated_at: string | null
+        }
+        Insert: {
+          id?: string
+          client_id: string
+          project_id: string
+          title: string
+          entries?: Json
+          linked_entity_ids?: Json
+          is_pinned_on_canvas?: boolean
+          position_x?: number | null
+          position_y?: number | null
+          created_at?: string | null
+          updated_at?: string | null
+        }
+        Update: {
+          id?: string
+          client_id?: string
+          project_id?: string
+          title?: string
+          entries?: Json
+          linked_entity_ids?: Json
+          is_pinned_on_canvas?: boolean
+          position_x?: number | null
+          position_y?: number | null
+          created_at?: string | null
+          updated_at?: string | null
+        }
+        Relationships: []
+      }
     }
     Views: Record<string, never>
     Functions: Record<string, never>

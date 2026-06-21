@@ -47,6 +47,39 @@ export type EdgeData = {
   whyItMatters?: string
 }
 
+export type AssetEntryType = 'music' | 'image' | 'document' | 'link' | 'custom'
+
+export type AssetEntry = {
+  id: string
+  type: AssetEntryType
+  label: string
+  value: string
+  isLinkified: boolean
+}
+
+export type AssetData = {
+  id: string
+  title: string
+  linkedEntityIds: string[]
+  isPinnedOnCanvas: boolean
+  position?: { x: number; y: number }
+  entries: AssetEntry[]
+}
+
+export type AssetNodeData = {
+  assetId: string
+  title: string
+  entryCount: number
+  entrySummary: string
+}
+
+export function isUrl(text: string): boolean {
+  try {
+    const u = new URL(text)
+    return u.protocol === 'http:' || u.protocol === 'https:'
+  } catch { return false }
+}
+
 export const ENTITY_TYPE_PRESETS = ['Character', 'Event', 'Location', 'Object'] as const
 export type EntityType = typeof ENTITY_TYPE_PRESETS[number]
 

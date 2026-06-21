@@ -57,6 +57,7 @@ export function ProjectDashboard({ onOpenProject }: Props) {
           entitySchema: projectData.entitySchema,
           relSchema: projectData.relSchema,
           conceptSchema: projectData.conceptSchema,
+          assets: projectData.assets ?? [],
         },
         0,
       )

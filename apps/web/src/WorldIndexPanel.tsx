@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react'
 import type { Edge } from '@xyflow/react'
-import type { GraphNode } from './types'
+import type { GraphNode, AssetData } from './types'
 import type { ConceptSchemaType } from './conceptSchema'
 import { SIZE_LEVELS } from './types'
 
@@ -8,12 +8,14 @@ type Props = {
   nodes: GraphNode[]
   edges: Edge[]
   conceptSchemas: ConceptSchemaType[]
+  assets: AssetData[]
   onSelectNode: (id: string) => void
   onSelectEdge: (id: string) => void
+  onToggleAssetPin: (id: string) => void
   onClose: () => void
 }
 
-export function WorldIndexPanel({ nodes, edges, conceptSchemas, onSelectNode, onSelectEdge, onClose }: Props) {
+export function WorldIndexPanel({ nodes, edges, conceptSchemas, assets, onSelectNode, onSelectEdge, onToggleAssetPin, onClose }: Props) {
   const [search, setSearch] = useState('')
   const [collapsed, setCollapsed] = useState<Record<string, boolean>>({})
 
@@ -90,6 +92,23 @@ export function WorldIndexPanel({ nodes, edges, conceptSchemas, onSelectNode, on
   }, [nodes, conceptSchemas, q])
 
   const totalConcepts = conceptGroups.reduce((sum, g) => sum + g.items.length, 0)
+
+  // ── Assets ────────────────────────────────────────────────────────────
+  const assetGroups = useMemo(() => {
+    const nameOf = (id: string) => nodes.find(n => n.id === id)?.data.label ?? id
+    const filtered = assets.filter(a =>
+      !q
+      || a.title.toLowerCase().includes(q)
+      || a.entries.some(e => e.label.toLowerCase().includes(q))
+      || a.linkedEntityIds.some(eid => nameOf(eid).toLowerCase().includes(q)),
+    )
+    const pinned = filtered.filter(a => a.isPinnedOnCanvas)
+    const linked = filtered.filter(a => !a.isPinnedOnCanvas && a.linkedEntityIds.length > 0)
+    const unlinked = filtered.filter(a => !a.isPinnedOnCanvas && a.linkedEntityIds.length === 0)
+    return { pinned, linked, unlinked }
+  }, [assets, nodes, q])
+
+  const totalAssets = assetGroups.pinned.length + assetGroups.linked.length + assetGroups.unlinked.length
 
   return (
     <div
@@ -218,8 +237,44 @@ export function WorldIndexPanel({ nodes, edges, conceptSchemas, onSelectNode, on
             </IndexSection>
           )}
 
+          {/* ── Assets ── */}
+          <IndexSection
+            label="Assets" count={totalAssets}
+            open={isOpen('assets')} onToggle={() => toggle('assets')}
+          >
+            {totalAssets === 0
+              ? <EmptyRow text={q ? 'No assets match' : 'No assets yet'} />
+              : <>
+                {assetGroups.pinned.length > 0 && (
+                  <div>
+                    <TypeHeading text={`Pinned (${assetGroups.pinned.length})`} />
+                    {assetGroups.pinned.map(a => (
+                      <AssetRow key={a.id} asset={a} nodes={nodes} onTogglePin={onToggleAssetPin} />
+                    ))}
+                  </div>
+                )}
+                {assetGroups.linked.length > 0 && (
+                  <div>
+                    <TypeHeading text={`Linked (${assetGroups.linked.length})`} />
+                    {assetGroups.linked.map(a => (
+                      <AssetRow key={a.id} asset={a} nodes={nodes} onTogglePin={onToggleAssetPin} />
+                    ))}
+                  </div>
+                )}
+                {assetGroups.unlinked.length > 0 && (
+                  <div>
+                    <TypeHeading text={`Unlinked (${assetGroups.unlinked.length})`} />
+                    {assetGroups.unlinked.map(a => (
+                      <AssetRow key={a.id} asset={a} nodes={nodes} onTogglePin={onToggleAssetPin} />
+                    ))}
+                  </div>
+                )}
+              </>
+            }
+          </IndexSection>
+
           {/* Global empty state */}
-          {nodes.length === 0 && edges.length === 0 && (
+          {nodes.length === 0 && edges.length === 0 && assets.length === 0 && (
             <div style={{ padding: '48px 0', textAlign: 'center', color: '#a1a1aa', fontSize: 14 }}>
               Your world is empty — add entities to get started
             </div>
@@ -315,6 +370,38 @@ function Pill({ text, color, bg }: { text: string; color: string; bg: string }) 
 function EmptyRow({ text }: { text: string }) {
   return (
     <div style={{ padding: '10px 8px', fontSize: 13, color: '#a1a1aa' }}>{text}</div>
+  )
+}
+
+function AssetRow({ asset, nodes, onTogglePin }: { asset: AssetData; nodes: GraphNode[]; onTogglePin: (id: string) => void }) {
+  const entrySummary = asset.entries.slice(0, 3).map(e => e.label || e.type).join(', ')
+  const linkedNames = asset.linkedEntityIds
+    .map(eid => nodes.find(n => n.id === eid)?.data.label)
+    .filter(Boolean)
+  return (
+    <div style={{
+      display: 'flex', alignItems: 'center', gap: 8, width: '100%',
+      padding: '5px 8px', borderRadius: 6, fontSize: 13,
+    }}>
+      <span style={{ fontWeight: 600, color: '#18181b', flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+        {asset.title}
+      </span>
+      {entrySummary && <span style={{ fontSize: 11, color: '#a1a1aa', maxWidth: 120, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{entrySummary}</span>}
+      {linkedNames.length > 0 && linkedNames.map((name, i) => (
+        <Pill key={i} text={name!} color="#6366f1" bg="#ede9fe" />
+      ))}
+      <button
+        onClick={() => onTogglePin(asset.id)}
+        style={{
+          fontSize: 10, fontWeight: 600, cursor: 'pointer',
+          background: 'none', border: 'none', padding: '2px 4px',
+          color: asset.isPinnedOnCanvas ? '#dc2626' : '#6366f1',
+          flexShrink: 0,
+        }}
+      >
+        {asset.isPinnedOnCanvas ? 'Unpin' : 'Pin'}
+      </button>
+    </div>
   )
 }
 

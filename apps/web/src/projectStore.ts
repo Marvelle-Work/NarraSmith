@@ -2,6 +2,7 @@ import { DEFAULT_SCHEMA_TYPES, type SchemaType, uid } from './schema'
 import { DEFAULT_RELATIONSHIP_TYPES, type RelationshipType } from './relationshipSchema'
 import { DEFAULT_CONCEPT_SCHEMAS, type ConceptSchemaType } from './conceptSchema'
 import type { ProjectTemplate } from './templates'
+import type { AssetData } from './types'
 
 // ── Types ───────────────────────────────────────────────────────────────
 
@@ -20,6 +21,7 @@ export type ProjectData = {
   entitySchema: SchemaType[]
   relSchema: RelationshipType[]
   conceptSchema: ConceptSchemaType[]
+  assets: AssetData[]
 }
 
 export type ProjectStore = {
@@ -51,6 +53,7 @@ export function makeDefaultProject(id?: string, name = 'My World'): ProjectData 
     entitySchema: DEFAULT_SCHEMA_TYPES,
     relSchema: DEFAULT_RELATIONSHIP_TYPES,
     conceptSchema: DEFAULT_CONCEPT_SCHEMAS,
+    assets: [],
   }
 }
 
@@ -85,9 +88,30 @@ function migrateFromLegacy(): ProjectStore | null {
   }
 }
 
+function migrateAsset(a: any): AssetData {
+  if (Array.isArray(a.entries)) return a as AssetData
+  const entryType = ({ audio: 'music', note: 'custom' } as Record<string, string>)[a.assetType] ?? a.assetType ?? 'link'
+  return {
+    id: a.id,
+    title: a.title ?? 'Untitled',
+    linkedEntityIds: a.linkedEntityIds ?? [],
+    isPinnedOnCanvas: a.isPinnedOnCanvas ?? false,
+    position: a.position,
+    entries: a.url ? [{
+      id: `entry-migrated-${a.id}`,
+      type: entryType as AssetData['entries'][number]['type'],
+      label: a.title ?? '',
+      value: a.url,
+      isLinkified: /^https?:\/\//.test(a.url),
+    }] : [],
+  }
+}
+
 function normalizeStore(store: ProjectStore): ProjectStore {
   for (const p of Object.values(store.projects)) {
     if (!p.conceptSchema) p.conceptSchema = DEFAULT_CONCEPT_SCHEMAS
+    if (!p.assets) p.assets = []
+    else p.assets = p.assets.map(migrateAsset)
     if (!p.updatedAt) p.updatedAt = p.createdAt
   }
   return store
@@ -201,6 +225,7 @@ export function createProjectFromTemplate(store: ProjectStore, template: Project
     entitySchema: JSON.parse(JSON.stringify(template.entitySchema)),
     relSchema: JSON.parse(JSON.stringify(template.relSchema)),
     conceptSchema: JSON.parse(JSON.stringify(template.conceptSchema)),
+    assets: [],
   }
   return {
     ...store,
