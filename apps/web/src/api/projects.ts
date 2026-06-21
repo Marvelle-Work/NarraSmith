@@ -1,4 +1,4 @@
-import { apiFetch } from './client'
+import { apiFetch, API_BASE } from './client'
 import type { ProjectData } from '../projectStore'
 
 export type ProjectMeta = {
@@ -90,7 +90,6 @@ export async function importProjectToCloud(jsonPayload: unknown): Promise<Import
 }
 
 export async function getSharedProject(shareId: string): Promise<ProjectData> {
-  const API_BASE = import.meta.env.VITE_API_BASE_URL as string ?? 'http://localhost:3000'
   const res = await fetch(`${API_BASE}/shared/${shareId}`)
   if (!res.ok) throw new Error('Project not found or not shared')
   return res.json()
