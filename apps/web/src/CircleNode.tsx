@@ -1,3 +1,4 @@
+import { Fragment } from 'react'
 import { Handle, Position, type NodeProps } from '@xyflow/react'
 import type { GraphNode } from './types'
 import { entityColors, SIZE_LEVELS } from './types'
@@ -68,11 +69,16 @@ export function CircleNode({ data, selected }: NodeProps<GraphNode>) {
         {data.label}
       </span>
 
-      {(['Top', 'Right', 'Bottom', 'Left'] as const).map(pos => (
-        <>
-          <Handle key={`s-${pos}`} type="source" position={Position[pos]} style={handleStyle(border)} />
-          <Handle key={`t-${pos}`} type="target" position={Position[pos]} style={handleStyle(border)} />
-        </>
+      {([
+        ['Top', 'north'],
+        ['Right', 'east'],
+        ['Bottom', 'south'],
+        ['Left', 'west'],
+      ] as const).map(([pos, hid]) => (
+        <Fragment key={hid}>
+          <Handle type="source" id={hid} position={Position[pos]} style={handleStyle(border)} />
+          <Handle type="target" id={hid} position={Position[pos]} style={handleStyle(border)} />
+        </Fragment>
       ))}
     </div>
   )

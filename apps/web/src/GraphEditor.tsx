@@ -5,6 +5,7 @@ import {
   Controls,
   MiniMap,
   addEdge,
+  reconnectEdge,
   useNodesState,
   useEdgesState,
   useReactFlow,
@@ -359,6 +360,10 @@ export function GraphEditor({ projectId, onBackToDashboard }: GraphEditorProps) 
     setPendingConn(null)
   }, [pendingConn, setEdges])
 
+  const onReconnect = useCallback((oldEdge: Edge, newConn: Connection) => {
+    setEdges(eds => reconnectEdge(oldEdge, newConn, eds))
+  }, [setEdges])
+
   // ── Click handlers ────────────────────────────────────────────────────
   const onNodeClick: NodeMouseHandler<GraphNode> = useCallback((_e, node) => {
     setSelectedNodeId(node.id)
@@ -555,6 +560,8 @@ export function GraphEditor({ projectId, onBackToDashboard }: GraphEditorProps) 
           nodeTypes={nodeTypes} edgeTypes={edgeTypes}
           onNodesChange={onNodesChange} onEdgesChange={onEdgesChange}
           onConnect={onConnect}
+          onReconnect={onReconnect}
+          edgesReconnectable
           onNodeClick={onNodeClick} onEdgeClick={onEdgeClick} onPaneClick={onPaneClick}
           zoomOnDoubleClick={false}
           fitView

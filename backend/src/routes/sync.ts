@@ -23,6 +23,8 @@ type SyncBody = {
       id: string
       source: string
       target: string
+      sourceHandle?: string
+      targetHandle?: string
       label?: string
       data?: {
         labelT?: number
@@ -287,6 +289,8 @@ export default async function syncRoutes(app: FastifyInstance) {
                 schemaColor: e.data?.schemaColor ?? null,
                 description: e.data?.description ?? null,
                 whyItMatters: e.data?.whyItMatters ?? null,
+                sourceHandle: e.sourceHandle ?? null,
+                targetHandle: e.targetHandle ?? null,
               } as Record<string, Json>,
             }
           })

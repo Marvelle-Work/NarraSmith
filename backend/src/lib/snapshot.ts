@@ -73,6 +73,8 @@ export async function rebuildProjectSnapshot(
       id: r.client_id,
       source: nodeClientId.get(r.source_node_id) ?? r.source_node_id,
       target: nodeClientId.get(r.target_node_id) ?? r.target_node_id,
+      sourceHandle: props.sourceHandle ?? undefined,
+      targetHandle: props.targetHandle ?? undefined,
       label: props.label ?? undefined,
       type: 'relationship',
       data: {
