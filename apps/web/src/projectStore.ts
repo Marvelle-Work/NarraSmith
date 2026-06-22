@@ -2,7 +2,7 @@ import { DEFAULT_SCHEMA_TYPES, type SchemaType, uid } from './schema'
 import { DEFAULT_RELATIONSHIP_TYPES, type RelationshipType } from './relationshipSchema'
 import { DEFAULT_CONCEPT_SCHEMAS, type ConceptSchemaType } from './conceptSchema'
 import type { ProjectTemplate } from './templates'
-import type { AssetData } from './types'
+import type { AssetData, CanvasImage } from './types'
 
 // ── Types ───────────────────────────────────────────────────────────────
 
@@ -22,6 +22,7 @@ export type ProjectData = {
   relSchema: RelationshipType[]
   conceptSchema: ConceptSchemaType[]
   assets: AssetData[]
+  canvasImages: CanvasImage[]
 }
 
 export type ProjectStore = {
@@ -54,6 +55,7 @@ export function makeDefaultProject(id?: string, name = 'My World'): ProjectData 
     relSchema: DEFAULT_RELATIONSHIP_TYPES,
     conceptSchema: DEFAULT_CONCEPT_SCHEMAS,
     assets: [],
+    canvasImages: [],
   }
 }
 
@@ -112,6 +114,7 @@ function normalizeStore(store: ProjectStore): ProjectStore {
     if (!p.conceptSchema) p.conceptSchema = DEFAULT_CONCEPT_SCHEMAS
     if (!p.assets) p.assets = []
     else p.assets = p.assets.map(migrateAsset)
+    if (!p.canvasImages) p.canvasImages = []
     if (!p.updatedAt) p.updatedAt = p.createdAt
   }
   return store
@@ -226,6 +229,7 @@ export function createProjectFromTemplate(store: ProjectStore, template: Project
     relSchema: JSON.parse(JSON.stringify(template.relSchema)),
     conceptSchema: JSON.parse(JSON.stringify(template.conceptSchema)),
     assets: [],
+    canvasImages: [],
   }
   return {
     ...store,

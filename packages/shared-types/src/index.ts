@@ -18,6 +18,7 @@ export type RelationshipType = Tables['relationship_types']['Row']
 export type Relationship     = Tables['relationships']['Row']
 export type ConceptType      = Tables['concept_types']['Row']
 export type AssetNodeRow     = Tables['asset_nodes']['Row']
+export type CanvasImageRow   = Tables['canvas_images']['Row']
 
 // ── Insert / Update convenience types ────────────────────────────────────────
 
@@ -28,6 +29,7 @@ export type InsertRelationshipType = Tables['relationship_types']['Insert']
 export type InsertRelationship     = Tables['relationships']['Insert']
 export type InsertConceptType      = Tables['concept_types']['Insert']
 export type InsertAssetNode        = Tables['asset_nodes']['Insert']
+export type InsertCanvasImage      = Tables['canvas_images']['Insert']
 
 export type UpdateProject          = Tables['projects']['Update']
 export type UpdateNodeType         = Tables['node_types']['Update']
@@ -36,3 +38,4 @@ export type UpdateRelationshipType = Tables['relationship_types']['Update']
 export type UpdateRelationship     = Tables['relationships']['Update']
 export type UpdateConceptType      = Tables['concept_types']['Update']
 export type UpdateAssetNode        = Tables['asset_nodes']['Update']
+export type UpdateCanvasImage      = Tables['canvas_images']['Update']

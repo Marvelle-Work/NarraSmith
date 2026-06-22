@@ -4,7 +4,7 @@ import { db } from '../db.js'
 export async function rebuildProjectSnapshot(
   projectId: string,
 ): Promise<Record<string, unknown>> {
-  const [nodesRes, relsRes, nodeTypesRes, relTypesRes, conceptTypesRes, assetNodesRes, projectRes] =
+  const [nodesRes, relsRes, nodeTypesRes, relTypesRes, conceptTypesRes, assetNodesRes, canvasImagesRes, projectRes] =
     await Promise.all([
       db.from('nodes').select('*').eq('project_id', projectId),
       db.from('relationships').select('*').eq('project_id', projectId),
@@ -12,6 +12,7 @@ export async function rebuildProjectSnapshot(
       db.from('relationship_types').select('*').eq('project_id', projectId),
       db.from('concept_types').select('*').eq('project_id', projectId),
       db.from('asset_nodes').select('*').eq('project_id', projectId),
+      db.from('canvas_images').select('*').eq('project_id', projectId),
       db.from('projects').select('name, created_at').eq('id', projectId).single(),
     ])
 
@@ -139,6 +140,38 @@ export async function rebuildProjectSnapshot(
         }))
     })
 
+  const canvasImages = (canvasImagesRes.data ?? []).map(ci => ({
+    id: ci.client_id,
+    title: ci.title,
+    imageUrl: ci.image_url,
+    x: ci.position_x,
+    y: ci.position_y,
+    width: ci.width,
+    height: ci.height,
+    rotation: ci.rotation,
+    opacity: ci.opacity,
+    locked: ci.locked,
+    zIndex: ci.z_index,
+  }))
+
+  const canvasImageNodes = canvasImages.map(ci => ({
+    id: `canvas-img-${ci.id}`,
+    type: 'canvas-image',
+    position: { x: ci.x, y: ci.y },
+    draggable: !ci.locked,
+    zIndex: ci.zIndex - 1000,
+    data: {
+      canvasImageId: ci.id,
+      title: ci.title,
+      imageUrl: ci.imageUrl,
+      width: ci.width,
+      height: ci.height,
+      rotation: ci.rotation,
+      opacity: ci.opacity,
+      locked: ci.locked,
+    },
+  }))
+
   const now = new Date().toISOString()
   return {
     id: projectId,
@@ -146,12 +179,13 @@ export async function rebuildProjectSnapshot(
     createdAt: projectRes.data?.created_at ?? now,
     updatedAt: now,
     graph: {
-      nodes: [...graphNodes, ...assetCanvasNodes],
+      nodes: [...canvasImageNodes, ...graphNodes, ...assetCanvasNodes],
       edges: [...graphEdges, ...tetherEdges],
     },
     entitySchema,
     relSchema,
     conceptSchema,
     assets,
+    canvasImages,
   }
 }

@@ -3,7 +3,7 @@ import type { CommandId, CommandPayload } from './commands'
 
 export type ContextMenuTarget =
   | { type: 'canvas'; position: { x: number; y: number } }
-  | { type: 'node'; nodeId: string; nodeType: 'entity' | 'asset' }
+  | { type: 'node'; nodeId: string; nodeType: 'entity' | 'asset' | 'canvas-image' }
   | { type: 'edge'; edgeId: string }
 
 export type ContextMenuItem = {
@@ -92,9 +92,13 @@ const assetIdFromNode = (t: ContextMenuTarget) =>
   t.type === 'node' ? { id: t.nodeId.replace('asset-node-', '') } : EMPTY
 const edgeId = (t: ContextMenuTarget) => t.type === 'edge' ? { id: t.edgeId } : EMPTY
 
+const canvasImgId = (t: ContextMenuTarget) =>
+  t.type === 'node' ? { id: t.nodeId.replace('canvas-img-', '') } : EMPTY
+
 export const CANVAS_ITEMS: ContextMenuItem[] = [
   { commandId: 'entity.create', label: 'New Entity', payloadFromTarget: t => t.type === 'canvas' ? { position: t.position } : EMPTY },
   { commandId: 'asset.create', label: 'New Asset', payloadFromTarget: () => EMPTY },
+  { commandId: 'canvas-image.insert', label: 'Insert Canvas Image', payloadFromTarget: t => t.type === 'canvas' ? { position: t.position } : EMPTY },
   { commandId: 'ui.world-index', label: 'World Index', dividerBefore: true, payloadFromTarget: () => EMPTY },
   { commandId: 'ui.asset-index', label: 'Assets', payloadFromTarget: () => EMPTY },
 ]
@@ -111,6 +115,13 @@ export const ASSET_ITEMS: ContextMenuItem[] = [
   { commandId: 'asset.delete', label: 'Delete Asset', color: '#dc2626', dividerBefore: true, payloadFromTarget: assetIdFromNode },
 ]
 
+export const CANVAS_IMAGE_ITEMS: ContextMenuItem[] = [
+  { commandId: 'canvas-image.select', label: 'Edit', payloadFromTarget: canvasImgId },
+  { commandId: 'canvas-image.toggle-lock', label: 'Toggle Lock', payloadFromTarget: canvasImgId },
+  { commandId: 'canvas-image.duplicate', label: 'Duplicate', payloadFromTarget: canvasImgId },
+  { commandId: 'canvas-image.delete', label: 'Delete', color: '#dc2626', dividerBefore: true, payloadFromTarget: canvasImgId },
+]
+
 export const EDGE_ITEMS: ContextMenuItem[] = [
   { commandId: 'edge.select', label: 'Edit', payloadFromTarget: edgeId },
   { commandId: 'edge.reverse', label: 'Reverse Direction', payloadFromTarget: edgeId },
@@ -120,7 +131,10 @@ export const EDGE_ITEMS: ContextMenuItem[] = [
 export function getMenuItems(target: ContextMenuTarget): ContextMenuItem[] {
   switch (target.type) {
     case 'canvas': return CANVAS_ITEMS
-    case 'node': return target.nodeType === 'asset' ? ASSET_ITEMS : ENTITY_ITEMS
+    case 'node':
+      if (target.nodeType === 'asset') return ASSET_ITEMS
+      if (target.nodeType === 'canvas-image') return CANVAS_IMAGE_ITEMS
+      return ENTITY_ITEMS
     case 'edge': return EDGE_ITEMS
   }
 }

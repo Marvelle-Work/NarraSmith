@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react'
 import type { Edge } from '@xyflow/react'
-import type { GraphNode, AssetData } from './types'
+import type { GraphNode, AssetData, CanvasImage } from './types'
 import type { ConceptSchemaType } from './conceptSchema'
 import { SIZE_LEVELS } from './types'
 
@@ -9,13 +9,15 @@ type Props = {
   edges: Edge[]
   conceptSchemas: ConceptSchemaType[]
   assets: AssetData[]
+  canvasImages: CanvasImage[]
   onSelectNode: (id: string) => void
   onSelectEdge: (id: string) => void
   onToggleAssetPin: (id: string) => void
+  onFocusCanvasImage: (id: string) => void
   onClose: () => void
 }
 
-export function WorldIndexPanel({ nodes, edges, conceptSchemas, assets, onSelectNode, onSelectEdge, onToggleAssetPin, onClose }: Props) {
+export function WorldIndexPanel({ nodes, edges, conceptSchemas, assets, canvasImages, onSelectNode, onSelectEdge, onToggleAssetPin, onFocusCanvasImage, onClose }: Props) {
   const [search, setSearch] = useState('')
   const [collapsed, setCollapsed] = useState<Record<string, boolean>>({})
 
@@ -109,6 +111,13 @@ export function WorldIndexPanel({ nodes, edges, conceptSchemas, assets, onSelect
   }, [assets, nodes, q])
 
   const totalAssets = assetGroups.pinned.length + assetGroups.linked.length + assetGroups.unlinked.length
+
+  // ── Canvas Images ─────────────────────────────────────────────────────
+  const filteredCanvasImages = useMemo(() => {
+    return canvasImages.filter(ci =>
+      !q || ci.title.toLowerCase().includes(q),
+    )
+  }, [canvasImages, q])
 
   return (
     <div
@@ -273,8 +282,29 @@ export function WorldIndexPanel({ nodes, edges, conceptSchemas, assets, onSelect
             }
           </IndexSection>
 
+          {/* ── Canvas Images ── */}
+          {canvasImages.length > 0 && (
+            <IndexSection
+              label="Canvas Images" count={filteredCanvasImages.length}
+              open={isOpen('canvas-images')} onToggle={() => toggle('canvas-images')}
+            >
+              {filteredCanvasImages.length === 0
+                ? <EmptyRow text="No canvas images match" />
+                : filteredCanvasImages.map(ci => (
+                  <IndexRow key={ci.id} onClick={() => { onFocusCanvasImage(ci.id); onClose() }}>
+                    <span style={{ fontWeight: 600, color: '#18181b', flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                      {ci.title}
+                    </span>
+                    <span style={{ fontSize: 11, color: '#a1a1aa' }}>{ci.width}x{ci.height}</span>
+                    {ci.locked && <Pill text="Locked" color="#71717a" bg="#f4f4f5" />}
+                  </IndexRow>
+                ))
+              }
+            </IndexSection>
+          )}
+
           {/* Global empty state */}
-          {nodes.length === 0 && edges.length === 0 && assets.length === 0 && (
+          {nodes.length === 0 && edges.length === 0 && assets.length === 0 && canvasImages.length === 0 && (
             <div style={{ padding: '48px 0', textAlign: 'center', color: '#a1a1aa', fontSize: 14 }}>
               Your world is empty — add entities to get started
             </div>

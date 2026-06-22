@@ -300,6 +300,60 @@ export type Database = {
         }
         Relationships: []
       }
+      canvas_images: {
+        Row: {
+          id: string
+          client_id: string
+          project_id: string
+          title: string
+          image_url: string
+          position_x: number
+          position_y: number
+          width: number
+          height: number
+          rotation: number
+          opacity: number
+          locked: boolean
+          z_index: number
+          created_at: string | null
+          updated_at: string | null
+        }
+        Insert: {
+          id?: string
+          client_id: string
+          project_id: string
+          title: string
+          image_url: string
+          position_x?: number
+          position_y?: number
+          width?: number
+          height?: number
+          rotation?: number
+          opacity?: number
+          locked?: boolean
+          z_index?: number
+          created_at?: string | null
+          updated_at?: string | null
+        }
+        Update: {
+          id?: string
+          client_id?: string
+          project_id?: string
+          title?: string
+          image_url?: string
+          position_x?: number
+          position_y?: number
+          width?: number
+          height?: number
+          rotation?: number
+          opacity?: number
+          locked?: boolean
+          z_index?: number
+          created_at?: string | null
+          updated_at?: string | null
+        }
+        Relationships: []
+      }
     }
     Views: Record<string, never>
     Functions: Record<string, never>

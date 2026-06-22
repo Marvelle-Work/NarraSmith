@@ -10,6 +10,11 @@ export type CommandPayload = {
   'edge.select': { id: string }
   'edge.reverse': { id: string }
   'edge.delete': { id: string }
+  'canvas-image.insert': { position: { x: number; y: number } }
+  'canvas-image.select': { id: string }
+  'canvas-image.delete': { id: string }
+  'canvas-image.duplicate': { id: string }
+  'canvas-image.toggle-lock': { id: string }
   'ui.world-index': {}
   'ui.asset-index': {}
 }

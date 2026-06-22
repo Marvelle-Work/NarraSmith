@@ -36,7 +36,8 @@ import { ContextMenu, getMenuItems, type ContextMenuTarget } from './ContextMenu
 import { createCommandExecutor, type CommandRegistry, type CommandId, type CommandPayload } from './commands'
 import { PlayButton } from './PlayButton'
 import { TetherEdge } from './TetherEdge'
-import type { AssetData, AssetNodeData } from './types'
+import { CanvasImageNode } from './CanvasImageNode'
+import type { AssetData, AssetNodeData, CanvasImage, CanvasImageNodeData } from './types'
 import { isUrl } from './types'
 import {
   loadProjectStore, saveProjectStore, getActiveProject,
@@ -50,7 +51,7 @@ import { ExportModal } from './ExportModal'
 import { useAutoSave } from './hooks/useAutoSave'
 import { getProjectData, updateProject } from './api/projects'
 
-const nodeTypes = { circle: CircleNode, asset: AssetNode }
+const nodeTypes = { circle: CircleNode, asset: AssetNode, 'canvas-image': CanvasImageNode }
 const edgeTypes = { relationship: RelationshipEdge, tether: TetherEdge }
 
 const UI_MODE_KEY = 'narrasmith-ui-mode'
@@ -73,7 +74,7 @@ function normalizeGraph(raw: { nodes: any[]; edges: any[]; rootNodeId?: string }
   if (!raw.nodes || raw.nodes.length === 0) return DEFAULT_GRAPH
   const rootId = raw.rootNodeId
   const nodes: GraphNode[] = raw.nodes
-    .filter((n: any) => n.type !== 'asset')
+    .filter((n: any) => n.type !== 'asset' && n.type !== 'canvas-image')
     .map((n: any, i: number) => ({
       ...n,
       type: 'circle',
@@ -98,6 +99,16 @@ function normalizeGraph(raw: { nodes: any[]; edges: any[]; rootNodeId?: string }
       position: n.position ?? { x: 200, y: 200 },
       data: n.data,
     }))
+  const canvasImageNodes = raw.nodes
+    .filter((n: any) => n.type === 'canvas-image')
+    .map((n: any) => ({
+      ...n,
+      type: 'canvas-image',
+      position: n.position ?? { x: 0, y: 0 },
+      draggable: !(n.data?.locked),
+      zIndex: (n.data?.zIndex ?? 0) - 1000,
+      data: n.data,
+    }))
   const edges: Edge[] = raw.edges
     .filter((e: any) => e.type !== 'tether')
     .map((e: any) => ({
@@ -115,7 +126,7 @@ function normalizeGraph(raw: { nodes: any[]; edges: any[]; rootNodeId?: string }
   const tetherEdges: Edge[] = raw.edges
     .filter((e: any) => e.type === 'tether')
     .map((e: any) => ({ ...e, type: 'tether' }))
-  return { nodes: [...nodes, ...assetNodes] as any, edges: [...edges, ...tetherEdges] }
+  return { nodes: [...canvasImageNodes, ...nodes, ...assetNodes] as any, edges: [...edges, ...tetherEdges] }
 }
 
 // ── Edge style resolution ────────────────────────────────────────────────
@@ -158,6 +169,7 @@ export function GraphEditor({ projectId, onBackToDashboard }: GraphEditorProps) 
     () => activeProject.conceptSchema ?? DEFAULT_CONCEPT_SCHEMAS,
   )
   const [assets, setAssets] = useState<AssetData[]>(() => activeProject.assets ?? [])
+  const [canvasImages, setCanvasImages] = useState<CanvasImage[]>(() => activeProject.canvasImages ?? [])
   const [rootNodeId, setRootNodeId] = useState<string | null>(
     () => (activeProject.graph as any).rootNodeId ?? null,
   )
@@ -197,6 +209,7 @@ export function GraphEditor({ projectId, onBackToDashboard }: GraphEditorProps) 
             setRelTypes(cloudData.relSchema)
             setConceptSchema(cloudData.conceptSchema ?? [])
             setAssets(cloudData.assets ?? [])
+            setCanvasImages(cloudData.canvasImages ?? [])
             setProjectName(cloudData.name)
             setRootNodeId((cloudData.graph as any).rootNodeId ?? null)
             storeRef.current.projects[projectId] = cloudData
@@ -262,6 +275,7 @@ export function GraphEditor({ projectId, onBackToDashboard }: GraphEditorProps) 
       setRelTypes(project.relSchema)
       setConceptSchema(project.conceptSchema ?? [])
       setAssets(project.assets ?? [])
+      setCanvasImages(project.canvasImages ?? [])
       setSelectedNodeId(null)
       setSelectedEdgeId(null)
       setShowImport(false)
@@ -277,6 +291,7 @@ export function GraphEditor({ projectId, onBackToDashboard }: GraphEditorProps) 
     setRelTypes(merged.relSchema)
     setConceptSchema(merged.conceptSchema ?? [])
     setAssets(merged.assets ?? [])
+    setCanvasImages(merged.canvasImages ?? [])
     setSelectedNodeId(null)
     setSelectedEdgeId(null)
     return report
@@ -287,12 +302,17 @@ export function GraphEditor({ projectId, onBackToDashboard }: GraphEditorProps) 
   useEffect(() => {
     if (!cloudLoadedRef.current) return
 
-    // Sync canvas positions back to assets before persisting
+    // Sync canvas positions back to assets and canvas images before persisting
     const syncedAssets = assets.map(a => {
       if (!a.isPinnedOnCanvas) return a
       const canvasNode = nodes.find(n => n.id === `asset-node-${a.id}`)
       if (!canvasNode) return a
       return { ...a, position: { x: canvasNode.position.x, y: canvasNode.position.y } }
+    })
+    const syncedCanvasImages = canvasImages.map(ci => {
+      const canvasNode = nodes.find(n => n.id === `canvas-img-${ci.id}`)
+      if (!canvasNode) return ci
+      return { ...ci, x: canvasNode.position.x, y: canvasNode.position.y }
     })
 
     const current = storeRef.current
@@ -308,13 +328,14 @@ export function GraphEditor({ projectId, onBackToDashboard }: GraphEditorProps) 
           relSchema: relTypes,
           conceptSchema,
           assets: syncedAssets,
+          canvasImages: syncedCanvasImages,
           updatedAt: new Date().toISOString(),
         },
       },
     }
     storeRef.current = next
     autoSave(next)
-  }, [nodes, edges, schemaTypes, relTypes, conceptSchema, assets, rootNodeId, projectName]) // eslint-disable-line react-hooks/exhaustive-deps
+  }, [nodes, edges, schemaTypes, relTypes, conceptSchema, assets, canvasImages, rootNodeId, projectName]) // eslint-disable-line react-hooks/exhaustive-deps
 
   // ── Sync project name to cloud on change ──────────────────────────────
   const initialNameRef = useRef(projectName)
@@ -361,7 +382,14 @@ export function GraphEditor({ projectId, onBackToDashboard }: GraphEditorProps) 
     }
   }, [selectedNodeId, edges, nodes])
 
-  const isAssetNode = selectedNode?.type === 'asset'
+  const isCanvasImageNode = selectedNode?.type === 'canvas-image'
+  const selectedCanvasImage = useMemo(() => {
+    if (!isCanvasImageNode || !selectedNode) return null
+    const ciId = (selectedNode.data as unknown as CanvasImageNodeData).canvasImageId
+    return canvasImages.find(c => c.id === ciId) ?? null
+  }, [isCanvasImageNode, selectedNode, canvasImages])
+
+  const isAssetNode = !isCanvasImageNode && selectedNode?.type === 'asset'
   const selectedAsset = useMemo(() => {
     if (!isAssetNode || !selectedNode) return null
     const assetId = (selectedNode.data as unknown as AssetNodeData).assetId
@@ -481,7 +509,7 @@ export function GraphEditor({ projectId, onBackToDashboard }: GraphEditorProps) 
 
   const onNodeContextMenu = useCallback((_e: MouseEvent | React.MouseEvent, node: GraphNode) => {
     _e.preventDefault()
-    const nodeType = node.type === 'asset' ? 'asset' as const : 'entity' as const
+    const nodeType = node.type === 'asset' ? 'asset' as const : node.type === 'canvas-image' ? 'canvas-image' as const : 'entity' as const
     setCtxMenu({ x: _e.clientX, y: _e.clientY, target: { type: 'node', nodeId: node.id, nodeType } })
     setSelectedNodeId(node.id)
     setSelectedEdgeId(null)
@@ -665,6 +693,61 @@ export function GraphEditor({ projectId, onBackToDashboard }: GraphEditorProps) 
     setShowNewAsset(false)
   }, [addAsset])
 
+  // ── Canvas image management ──────────────────────────────────────────
+  const [showNewCanvasImage, setShowNewCanvasImage] = useState(false)
+  const [newCanvasImagePos, setNewCanvasImagePos] = useState<{ x: number; y: number }>({ x: 0, y: 0 })
+
+  const addCanvasImage = useCallback((ci: CanvasImage) => {
+    setCanvasImages(prev => [...prev, ci])
+    setNodes(nds => [...nds, {
+      id: `canvas-img-${ci.id}`,
+      type: 'canvas-image',
+      position: { x: ci.x, y: ci.y },
+      draggable: !ci.locked,
+      zIndex: ci.zIndex - 1000,
+      data: {
+        canvasImageId: ci.id, title: ci.title, imageUrl: ci.imageUrl,
+        width: ci.width, height: ci.height, rotation: ci.rotation,
+        opacity: ci.opacity, locked: ci.locked,
+      },
+    } as any])
+  }, [setNodes])
+
+  const updateCanvasImage = useCallback((ci: CanvasImage) => {
+    setCanvasImages(prev => prev.map(c => c.id === ci.id ? ci : c))
+    setNodes(nds => nds.map(n => {
+      if (n.id !== `canvas-img-${ci.id}`) return n
+      return {
+        ...n,
+        draggable: !ci.locked,
+        data: {
+          canvasImageId: ci.id, title: ci.title, imageUrl: ci.imageUrl,
+          width: ci.width, height: ci.height, rotation: ci.rotation,
+          opacity: ci.opacity, locked: ci.locked,
+        } as any,
+      }
+    }))
+  }, [setNodes])
+
+  const deleteCanvasImage = useCallback((ciId: string) => {
+    setCanvasImages(prev => prev.filter(c => c.id !== ciId))
+    setNodes(nds => nds.filter(n => n.id !== `canvas-img-${ciId}`))
+    if (selectedNodeId === `canvas-img-${ciId}`) setSelectedNodeId(null)
+  }, [setNodes, selectedNodeId])
+
+  const duplicateCanvasImage = useCallback((ciId: string) => {
+    const orig = canvasImages.find(c => c.id === ciId)
+    if (!orig) return
+    const dup: CanvasImage = {
+      ...orig,
+      id: `ci-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+      title: `${orig.title} Copy`,
+      x: orig.x + 50,
+      y: orig.y + 50,
+    }
+    addCanvasImage(dup)
+  }, [canvasImages, addCanvasImage])
+
   // ── Command registry ───────────────────────────────────────────────────
   const commandRegistry: CommandRegistry = useMemo(() => ({
     'entity.create': ({ position }) => createEntityAt(position),
@@ -678,9 +761,17 @@ export function GraphEditor({ projectId, onBackToDashboard }: GraphEditorProps) 
     'edge.select': ({ id }) => { setSelectedEdgeId(id); setSelectedNodeId(null) },
     'edge.reverse': ({ id }) => reverseEdge(id),
     'edge.delete': ({ id }) => deleteEdge(id),
+    'canvas-image.insert': ({ position }) => { setNewCanvasImagePos(position); setShowNewCanvasImage(true) },
+    'canvas-image.select': ({ id }) => { setSelectedNodeId(`canvas-img-${id}`); setSelectedEdgeId(null) },
+    'canvas-image.delete': ({ id }) => deleteCanvasImage(id),
+    'canvas-image.duplicate': ({ id }) => duplicateCanvasImage(id),
+    'canvas-image.toggle-lock': ({ id }) => {
+      const ci = canvasImages.find(c => c.id === id)
+      if (ci) updateCanvasImage({ ...ci, locked: !ci.locked })
+    },
     'ui.world-index': () => setShowIndex(true),
     'ui.asset-index': () => setShowAssetIndex(true),
-  }), [createEntityAt, deleteEntity, toggleAssetPin, removeAsset, reverseEdge, deleteEdge])
+  }), [createEntityAt, deleteEntity, toggleAssetPin, removeAsset, reverseEdge, deleteEdge, deleteCanvasImage, duplicateCanvasImage, canvasImages, updateCanvasImage])
 
   const executeCommand = useMemo(() => createCommandExecutor(commandRegistry), [commandRegistry])
 
@@ -792,6 +883,12 @@ export function GraphEditor({ projectId, onBackToDashboard }: GraphEditorProps) 
                 <button onClick={() => { setShowNewAsset(true); setShowHamburger(false) }} style={dropdownItem}>
                   New Asset
                 </button>
+                <button onClick={() => {
+                  setNewCanvasImagePos(screenToFlowPosition({ x: window.innerWidth / 2, y: window.innerHeight / 2 }))
+                  setShowNewCanvasImage(true); setShowHamburger(false)
+                }} style={dropdownItem}>
+                  Canvas Image
+                </button>
                 <div style={dropdownDivider} />
                 <button onClick={() => { setShowSchema(s => !s); setShowRelSchema(false); setShowConceptSchema(false); setShowHamburger(false) }} style={{
                   ...dropdownItem, color: showSchema ? '#6366f1' : '#18181b',
@@ -871,6 +968,14 @@ export function GraphEditor({ projectId, onBackToDashboard }: GraphEditorProps) 
           display: 'flex', flexDirection: 'column', gap: 18, overflowY: 'auto',
           flexShrink: 0,
         }}>
+          {selectedNode && isCanvasImageNode && selectedCanvasImage && (
+            <CanvasImageInspector
+              image={selectedCanvasImage}
+              onUpdate={updateCanvasImage}
+              onDuplicate={duplicateCanvasImage}
+              onDelete={deleteCanvasImage}
+            />
+          )}
           {selectedNode && isAssetNode && selectedAsset && (
             <AssetInspectorPanel
               asset={selectedAsset}
@@ -947,10 +1052,11 @@ export function GraphEditor({ projectId, onBackToDashboard }: GraphEditorProps) 
       )}
       {showIndex && (
         <WorldIndexPanel
-          nodes={nodes} edges={edges} conceptSchemas={conceptSchema} assets={assets}
+          nodes={nodes} edges={edges} conceptSchemas={conceptSchema} assets={assets} canvasImages={canvasImages}
           onSelectNode={id => { setSelectedNodeId(id); setSelectedEdgeId(null) }}
           onSelectEdge={id => { setSelectedEdgeId(id); setSelectedNodeId(null) }}
           onToggleAssetPin={toggleAssetPin}
+          onFocusCanvasImage={id => { setSelectedNodeId(`canvas-img-${id}`); setSelectedEdgeId(null) }}
           onClose={() => setShowIndex(false)}
         />
       )}
@@ -980,6 +1086,13 @@ export function GraphEditor({ projectId, onBackToDashboard }: GraphEditorProps) 
         <NewAssetModal
           onAdd={createStandaloneAsset}
           onCancel={() => setShowNewAsset(false)}
+        />
+      )}
+      {showNewCanvasImage && (
+        <NewCanvasImageModal
+          position={newCanvasImagePos}
+          onAdd={(ci) => { addCanvasImage(ci); setShowNewCanvasImage(false) }}
+          onCancel={() => setShowNewCanvasImage(false)}
         />
       )}
       {ctxMenu && (
@@ -1082,6 +1195,126 @@ function NewAssetModal({ onAdd, onCancel }: { onAdd: (a: AssetData) => void; onC
         </div>
       </div>
     </div>
+  )
+}
+
+// ── New Canvas Image Modal ────────────────────────────────────────────────
+
+function NewCanvasImageModal({ position, onAdd, onCancel }: {
+  position: { x: number; y: number }
+  onAdd: (ci: CanvasImage) => void
+  onCancel: () => void
+}) {
+  const [title, setTitle] = useState('Untitled Image')
+  const [imageUrl, setImageUrl] = useState('')
+  const [width, setWidth] = useState(400)
+  const [height, setHeight] = useState(300)
+
+  const handleCreate = () => {
+    if (!imageUrl.trim()) return
+    onAdd({
+      id: `ci-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+      title: title.trim(),
+      imageUrl: imageUrl.trim(),
+      x: position.x, y: position.y,
+      width, height,
+      rotation: 0, opacity: 1, locked: false, zIndex: 0,
+    })
+  }
+
+  return (
+    <div style={{ position: 'fixed', inset: 0, zIndex: 100, display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'rgba(0,0,0,0.4)' }} onClick={onCancel}>
+      <div onClick={e => e.stopPropagation()} style={{ background: '#fff', borderRadius: 12, padding: '24px 28px', width: 380, boxShadow: '0 8px 32px rgba(0,0,0,0.18)', fontFamily: 'system-ui, sans-serif' }}>
+        <h2 style={{ margin: '0 0 16px', fontSize: 16, fontWeight: 700, color: '#18181b' }}>Insert Canvas Image</h2>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+          <input value={title} onChange={e => setTitle(e.target.value)} placeholder="Title" style={inputStyle} autoFocus />
+          <input value={imageUrl} onChange={e => setImageUrl(e.target.value)} placeholder="Image URL (https://...)" style={inputStyle} />
+          <div style={{ display: 'flex', gap: 8 }}>
+            <div style={{ flex: 1 }}>
+              <span style={{ fontSize: 11, fontWeight: 600, color: '#52525b' }}>Width</span>
+              <input type="number" value={width} onChange={e => setWidth(Number(e.target.value) || 400)} style={inputStyle} />
+            </div>
+            <div style={{ flex: 1 }}>
+              <span style={{ fontSize: 11, fontWeight: 600, color: '#52525b' }}>Height</span>
+              <input type="number" value={height} onChange={e => setHeight(Number(e.target.value) || 300)} style={inputStyle} />
+            </div>
+          </div>
+        </div>
+        <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end', marginTop: 16 }}>
+          <button onClick={onCancel} style={{ padding: '7px 14px', borderRadius: 6, border: '1px solid #d4d4d8', background: '#fff', color: '#52525b', fontWeight: 600, fontSize: 13, cursor: 'pointer' }}>Cancel</button>
+          <button onClick={handleCreate} disabled={!imageUrl.trim()} style={{ padding: '7px 14px', borderRadius: 6, border: 'none', background: '#18181b', color: '#fff', fontWeight: 600, fontSize: 13, cursor: 'pointer', opacity: imageUrl.trim() ? 1 : 0.5 }}>Insert</button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+// ── Canvas Image Inspector ───────────────────────────────────────────────
+
+function CanvasImageInspector({ image, onUpdate, onDuplicate, onDelete }: {
+  image: CanvasImage
+  onUpdate: (ci: CanvasImage) => void
+  onDuplicate: (id: string) => void
+  onDelete: (id: string) => void
+}) {
+  return (
+    <>
+      <h2 style={panelHeading}>Canvas Image</h2>
+
+      <PanelField label="Title">
+        <input value={image.title} onChange={e => onUpdate({ ...image, title: e.target.value })} style={inputStyle} />
+      </PanelField>
+
+      <PanelField label="Image URL">
+        <input value={image.imageUrl} onChange={e => onUpdate({ ...image, imageUrl: e.target.value })} style={inputStyle} placeholder="https://..." />
+      </PanelField>
+
+      <PanelField label="Dimensions">
+        <div style={{ display: 'flex', gap: 8 }}>
+          <div style={{ flex: 1 }}>
+            <span style={{ fontSize: 10, color: '#a1a1aa' }}>Width</span>
+            <input type="number" value={image.width} onChange={e => onUpdate({ ...image, width: Number(e.target.value) || 100 })} style={inputStyle} />
+          </div>
+          <div style={{ flex: 1 }}>
+            <span style={{ fontSize: 10, color: '#a1a1aa' }}>Height</span>
+            <input type="number" value={image.height} onChange={e => onUpdate({ ...image, height: Number(e.target.value) || 100 })} style={inputStyle} />
+          </div>
+        </div>
+      </PanelField>
+
+      <PanelField label={`Opacity (${Math.round(image.opacity * 100)}%)`}>
+        <input
+          type="range" min={0.05} max={1} step={0.05}
+          value={image.opacity}
+          onChange={e => onUpdate({ ...image, opacity: Number(e.target.value) })}
+          style={{ width: '100%', accentColor: '#6366f1' }}
+        />
+      </PanelField>
+
+      <PanelField label="Rotation">
+        <input type="number" value={image.rotation} onChange={e => onUpdate({ ...image, rotation: Number(e.target.value) })} style={inputStyle} />
+      </PanelField>
+
+      <button onClick={() => onUpdate({ ...image, locked: !image.locked })} style={rootToggleBtn(image.locked)}>
+        {image.locked ? 'Locked' : 'Unlocked'}
+      </button>
+
+      <button onClick={() => onDuplicate(image.id)} style={{
+        padding: '6px 12px', background: '#fff', color: '#52525b',
+        border: '1px solid #d4d4d8', borderRadius: 6, cursor: 'pointer',
+        fontWeight: 600, fontSize: 12, width: '100%',
+      }}>
+        Duplicate
+      </button>
+
+      <button onClick={() => onDelete(image.id)} style={{
+        padding: '6px 12px', background: '#fff', color: '#dc2626',
+        border: '1px solid #fecaca', borderRadius: 6, cursor: 'pointer',
+        fontWeight: 600, fontSize: 12, width: '100%',
+      }}>
+        Delete
+      </button>
+    </>
   )
 }
 

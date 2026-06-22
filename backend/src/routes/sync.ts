@@ -77,6 +77,19 @@ type SyncBody = {
     isPinnedOnCanvas?: boolean
     position?: { x: number; y: number }
   }>
+  canvasImages?: Array<{
+    id: string
+    title: string
+    imageUrl: string
+    x: number
+    y: number
+    width: number
+    height: number
+    rotation?: number
+    opacity?: number
+    locked?: boolean
+    zIndex?: number
+  }>
   version: number
 }
 
@@ -86,7 +99,7 @@ export default async function syncRoutes(app: FastifyInstance) {
     Body: SyncBody
   }>('/sync', async (req, reply) => {
     const { projectId } = req.params
-    const { graph, entitySchema, relSchema, conceptSchema, assets, version } = req.body
+    const { graph, entitySchema, relSchema, conceptSchema, assets, canvasImages, version } = req.body
 
     // ── Optimistic concurrency check ─────────────────────────────────
     const { data: project } = await db
@@ -110,6 +123,7 @@ export default async function syncRoutes(app: FastifyInstance) {
       existingRels,
       existingConcepts,
       existingAssetNodes,
+      existingCanvasImages,
     ] = await Promise.all([
       db.from('node_types').select('id, client_id').eq('project_id', projectId),
       db.from('nodes').select('id, client_id').eq('project_id', projectId),
@@ -117,6 +131,7 @@ export default async function syncRoutes(app: FastifyInstance) {
       db.from('relationships').select('id, client_id').eq('project_id', projectId),
       db.from('concept_types').select('id, client_id').eq('project_id', projectId),
       db.from('asset_nodes').select('id, client_id').eq('project_id', projectId),
+      db.from('canvas_images').select('id, client_id').eq('project_id', projectId),
     ])
 
     const existingNodeTypeByClientId = new Map(
@@ -136,6 +151,9 @@ export default async function syncRoutes(app: FastifyInstance) {
     )
     const existingAssetNodeByClientId = new Map(
       (existingAssetNodes.data ?? []).map(r => [r.client_id, r.id]),
+    )
+    const existingCanvasImageByClientId = new Map(
+      (existingCanvasImages.data ?? []).map(r => [r.client_id, r.id]),
     )
 
     try {
@@ -233,6 +251,32 @@ export default async function syncRoutes(app: FastifyInstance) {
         if (error) throw new Error(`asset_nodes upsert failed: ${error.message}`)
       }
 
+      // ── 3c. Upsert canvas_images ───────────────────────────────────
+      if (canvasImages && canvasImages.length > 0) {
+        const rows = canvasImages.map(ci => ({
+          id: existingCanvasImageByClientId.get(ci.id) ?? crypto.randomUUID(),
+          client_id: ci.id,
+          project_id: projectId,
+          title: ci.title,
+          image_url: ci.imageUrl,
+          position_x: ci.x,
+          position_y: ci.y,
+          width: ci.width,
+          height: ci.height,
+          rotation: ci.rotation ?? 0,
+          opacity: ci.opacity ?? 1,
+          locked: ci.locked ?? false,
+          z_index: ci.zIndex ?? 0,
+          updated_at: new Date().toISOString(),
+        }))
+
+        const { error } = await db
+          .from('canvas_images')
+          .upsert(rows, { onConflict: 'project_id,client_id' })
+
+        if (error) throw new Error(`canvas_images upsert failed: ${error.message}`)
+      }
+
       // ── 4. Resolve parent_id references for types ────────────────────
       for (const s of entitySchema) {
         if (s.parentId) {
@@ -259,7 +303,7 @@ export default async function syncRoutes(app: FastifyInstance) {
 
       // ── 5. Upsert nodes (entity nodes only — asset canvas nodes live in asset_nodes)
       const nodeClientToUuid = new Map<string, string>()
-      const entityNodes = graph.nodes.filter(n => !n.id.startsWith('asset-node-'))
+      const entityNodes = graph.nodes.filter(n => !n.id.startsWith('asset-node-') && !n.id.startsWith('canvas-img-'))
 
       if (entityNodes.length > 0) {
         const fallbackTypeUuid = nodeTypeClientToUuid.values().next().value
@@ -347,7 +391,10 @@ export default async function syncRoutes(app: FastifyInstance) {
       const incomingNodeTypeClientIds = new Set(entitySchema.map(s => s.id))
       const incomingRelTypeClientIds = new Set(relSchema.map(s => s.id))
       const incomingConceptClientIds = new Set(conceptSchema.map(s => s.id))
-      const incomingAssetClientIds = new Set((assets ?? []).map(a => a.id))
+      // Only delete assets/canvas-images if they were explicitly provided in the sync body.
+      // If undefined, the client didn't send them — preserve existing records.
+      const incomingAssetClientIds = assets ? new Set(assets.map(a => a.id)) : null
+      const incomingCanvasImageClientIds = canvasImages ? new Set(canvasImages.map(ci => ci.id)) : null
 
       const relsToDelete = [...existingRelByClientId.entries()]
         .filter(([cid]) => !incomingRelClientIds.has(cid))
@@ -364,9 +411,16 @@ export default async function syncRoutes(app: FastifyInstance) {
       const conceptsToDelete = [...existingConceptByClientId.entries()]
         .filter(([cid]) => !incomingConceptClientIds.has(cid))
         .map(([, uuid]) => uuid)
-      const assetNodesToDelete = [...existingAssetNodeByClientId.entries()]
-        .filter(([cid]) => !incomingAssetClientIds.has(cid))
-        .map(([, uuid]) => uuid)
+      const assetNodesToDelete = incomingAssetClientIds
+        ? [...existingAssetNodeByClientId.entries()]
+          .filter(([cid]) => !incomingAssetClientIds.has(cid))
+          .map(([, uuid]) => uuid)
+        : []
+      const canvasImagesToDelete = incomingCanvasImageClientIds
+        ? [...existingCanvasImageByClientId.entries()]
+          .filter(([cid]) => !incomingCanvasImageClientIds.has(cid))
+          .map(([, uuid]) => uuid)
+        : []
 
       if (relsToDelete.length > 0) {
         await db.from('relationships').delete().in('id', relsToDelete)
@@ -385,6 +439,9 @@ export default async function syncRoutes(app: FastifyInstance) {
       }
       if (assetNodesToDelete.length > 0) {
         await db.from('asset_nodes').delete().in('id', assetNodesToDelete)
+      }
+      if (canvasImagesToDelete.length > 0) {
+        await db.from('canvas_images').delete().in('id', canvasImagesToDelete)
       }
 
       // ── 8. Rebuild snapshot and update project ───────────────────────

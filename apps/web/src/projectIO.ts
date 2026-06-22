@@ -289,6 +289,7 @@ export function importProject(data: NarrasmithExport, store: ProjectStore): Proj
     relSchema: data.relationshipSchema,
     conceptSchema: data.conceptSchema,
     assets: (data as any).assets ?? [],
+    canvasImages: (data as any).canvasImages ?? [],
   }
 
   const next: ProjectStore = {

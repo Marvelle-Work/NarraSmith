@@ -73,6 +73,31 @@ export type AssetNodeData = {
   entrySummary: string
 }
 
+export type CanvasImage = {
+  id: string
+  title: string
+  imageUrl: string
+  x: number
+  y: number
+  width: number
+  height: number
+  rotation: number
+  opacity: number
+  locked: boolean
+  zIndex: number
+}
+
+export type CanvasImageNodeData = {
+  canvasImageId: string
+  title: string
+  imageUrl: string
+  width: number
+  height: number
+  rotation: number
+  opacity: number
+  locked: boolean
+}
+
 export function isUrl(text: string): boolean {
   try {
     const u = new URL(text)
