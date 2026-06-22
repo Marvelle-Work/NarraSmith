@@ -32,6 +32,8 @@ import { WorldIndexPanel } from './WorldIndexPanel'
 import { AssetNode } from './AssetNode'
 import { AssetEditor } from './AssetEditor'
 import { AssetIndexPanel } from './AssetIndexPanel'
+import { ContextMenu, getMenuItems, type ContextMenuTarget } from './ContextMenu'
+import { createCommandExecutor, type CommandRegistry, type CommandId, type CommandPayload } from './commands'
 import { PlayButton } from './PlayButton'
 import { TetherEdge } from './TetherEdge'
 import type { AssetData, AssetNodeData } from './types'
@@ -225,6 +227,7 @@ export function GraphEditor({ projectId, onBackToDashboard }: GraphEditorProps) 
   const [showNewAsset, setShowNewAsset]             = useState(false)
   const [showAssetIndex, setShowAssetIndex]         = useState(false)
   const [projectName, setProjectName]             = useState(() => activeProject.name)
+  const [ctxMenu, setCtxMenu] = useState<{ x: number; y: number; target: ContextMenuTarget } | null>(null)
 
   const [mode, setMode] = useState<UIMode>(
     () => (localStorage.getItem(UI_MODE_KEY) as UIMode | null) ?? 'story',
@@ -441,6 +444,54 @@ export function GraphEditor({ projectId, onBackToDashboard }: GraphEditorProps) 
   const onPaneClick = useCallback(() => {
     setSelectedNodeId(null)
     setSelectedEdgeId(null)
+    setCtxMenu(null)
+  }, [])
+
+  // ── Delete / reverse helpers ──────────────────────────────────────────
+  const deleteEntity = useCallback((nodeId: string) => {
+    setNodes(nds => nds.filter(n => n.id !== nodeId))
+    setEdges(eds => eds.filter(e => e.source !== nodeId && e.target !== nodeId))
+    if (selectedNodeId === nodeId) setSelectedNodeId(null)
+    if (rootNodeId === nodeId) setRootNodeId(null)
+  }, [setNodes, setEdges, selectedNodeId, rootNodeId])
+
+  const deleteEdge = useCallback((edgeId: string) => {
+    setEdges(eds => eds.filter(e => e.id !== edgeId))
+    if (selectedEdgeId === edgeId) setSelectedEdgeId(null)
+  }, [setEdges, selectedEdgeId])
+
+  const reverseEdge = useCallback((edgeId: string) => {
+    setEdges(eds => eds.map(e =>
+      e.id !== edgeId ? e : {
+        ...e,
+        source: e.target,
+        target: e.source,
+        sourceHandle: e.targetHandle,
+        targetHandle: e.sourceHandle,
+      },
+    ))
+  }, [setEdges])
+
+  // ── Context menu handlers ─────────────────────────────────────────────
+  const onPaneContextMenu = useCallback((e: MouseEvent | React.MouseEvent) => {
+    e.preventDefault()
+    const pos = screenToFlowPosition({ x: e.clientX, y: e.clientY })
+    setCtxMenu({ x: e.clientX, y: e.clientY, target: { type: 'canvas', position: pos } })
+  }, [screenToFlowPosition])
+
+  const onNodeContextMenu = useCallback((_e: MouseEvent | React.MouseEvent, node: GraphNode) => {
+    _e.preventDefault()
+    const nodeType = node.type === 'asset' ? 'asset' as const : 'entity' as const
+    setCtxMenu({ x: _e.clientX, y: _e.clientY, target: { type: 'node', nodeId: node.id, nodeType } })
+    setSelectedNodeId(node.id)
+    setSelectedEdgeId(null)
+  }, [])
+
+  const onEdgeContextMenu = useCallback((_e: MouseEvent | React.MouseEvent, edge: Edge) => {
+    _e.preventDefault()
+    setCtxMenu({ x: _e.clientX, y: _e.clientY, target: { type: 'edge', edgeId: edge.id } })
+    setSelectedEdgeId(edge.id)
+    setSelectedNodeId(null)
   }, [])
 
   // ── Data updaters ─────────────────────────────────────────────────────
@@ -614,6 +665,25 @@ export function GraphEditor({ projectId, onBackToDashboard }: GraphEditorProps) 
     setShowNewAsset(false)
   }, [addAsset])
 
+  // ── Command registry ───────────────────────────────────────────────────
+  const commandRegistry: CommandRegistry = useMemo(() => ({
+    'entity.create': ({ position }) => createEntityAt(position),
+    'entity.select': ({ id }) => { setSelectedNodeId(id); setSelectedEdgeId(null) },
+    'entity.delete': ({ id }) => deleteEntity(id),
+    'entity.toggle-root': ({ id }) => setRootNodeId(prev => prev === id ? null : id),
+    'asset.create': () => setShowNewAsset(true),
+    'asset.select': ({ id }) => { setSelectedNodeId(id); setSelectedEdgeId(null) },
+    'asset.toggle-pin': ({ id }) => toggleAssetPin(id),
+    'asset.delete': ({ id }) => removeAsset(id),
+    'edge.select': ({ id }) => { setSelectedEdgeId(id); setSelectedNodeId(null) },
+    'edge.reverse': ({ id }) => reverseEdge(id),
+    'edge.delete': ({ id }) => deleteEdge(id),
+    'ui.world-index': () => setShowIndex(true),
+    'ui.asset-index': () => setShowAssetIndex(true),
+  }), [createEntityAt, deleteEntity, toggleAssetPin, removeAsset, reverseEdge, deleteEdge])
+
+  const executeCommand = useMemo(() => createCommandExecutor(commandRegistry), [commandRegistry])
+
   // Close dropdowns on any outside click
   useEffect(() => {
     if (!showProjectMenu && !showHamburger) return
@@ -783,6 +853,9 @@ export function GraphEditor({ projectId, onBackToDashboard }: GraphEditorProps) 
           onReconnect={onReconnect}
           edgesReconnectable
           onNodeClick={onNodeClick} onEdgeClick={onEdgeClick} onPaneClick={onPaneClick}
+          onPaneContextMenu={onPaneContextMenu}
+          onNodeContextMenu={onNodeContextMenu as any}
+          onEdgeContextMenu={onEdgeContextMenu}
           zoomOnDoubleClick={false}
           fitView
         >
@@ -907,6 +980,16 @@ export function GraphEditor({ projectId, onBackToDashboard }: GraphEditorProps) 
         <NewAssetModal
           onAdd={createStandaloneAsset}
           onCancel={() => setShowNewAsset(false)}
+        />
+      )}
+      {ctxMenu && (
+        <ContextMenu
+          x={ctxMenu.x}
+          y={ctxMenu.y}
+          target={ctxMenu.target}
+          items={getMenuItems(ctxMenu.target)}
+          onExecute={executeCommand}
+          onClose={() => setCtxMenu(null)}
         />
       )}
     </div>
