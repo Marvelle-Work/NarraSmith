@@ -34,6 +34,7 @@ export type NodeData = {
   sizeLevel?: SizeLevel
   concepts?: Record<string, ConceptInstance[]>
   isRoot?: boolean
+  profileImageUrl?: string
 }
 
 export type GraphNode = Node<NodeData>

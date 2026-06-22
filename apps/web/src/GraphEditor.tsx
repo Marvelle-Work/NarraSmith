@@ -80,15 +80,16 @@ function normalizeGraph(raw: { nodes: any[]; edges: any[]; rootNodeId?: string }
       type: 'circle',
       position: n.position ?? { x: 100 + (i % 5) * 200, y: 100 + Math.floor(i / 5) * 200 },
       data: {
-        label:       n.data.label ?? 'Untitled',
-        entityType:  n.data.entityType ?? n.data.category ?? 'Character',
-        typeId:      n.data.typeId,
-        fields:      n.data.fields ?? {},
-        description: n.data.description ?? '',
-        color:       n.data.color,
-        sizeLevel:   (n.data.sizeLevel as SizeLevel | undefined) ?? 3,
-        concepts:    n.data.concepts,
-        isRoot:      n.id === rootId || undefined,
+        label:           n.data.label ?? 'Untitled',
+        entityType:      n.data.entityType ?? n.data.category ?? 'Character',
+        typeId:          n.data.typeId,
+        fields:          n.data.fields ?? {},
+        description:     n.data.description ?? '',
+        color:           n.data.color,
+        sizeLevel:       (n.data.sizeLevel as SizeLevel | undefined) ?? 3,
+        concepts:        n.data.concepts,
+        isRoot:          n.id === rootId || undefined,
+        profileImageUrl: n.data.profileImageUrl,
       } satisfies NodeData,
     }))
   const assetNodes = raw.nodes
@@ -1446,6 +1447,13 @@ function StoryEntityPanel({ node, schemaTypes, conceptSchemas, resolvedFields, r
         <ColorPicker value={node.data.color} onChange={color => onUpdate({ color: color || undefined })} />
       </PanelField>
 
+      <PanelField label="Appearance">
+        <AppearanceField
+          value={node.data.profileImageUrl}
+          onChange={url => onUpdate({ profileImageUrl: url || undefined })}
+        />
+      </PanelField>
+
       <PanelField label="Description">
         <textarea
           value={node.data.description ?? ''}
@@ -1574,6 +1582,13 @@ function SystemEntityPanel({ node, schemaTypes, conceptSchemas, resolvedFields, 
 
       <PanelField label="Color">
         <ColorPicker value={node.data.color} onChange={color => onUpdate({ color: color || undefined })} />
+      </PanelField>
+
+      <PanelField label="Appearance">
+        <AppearanceField
+          value={node.data.profileImageUrl}
+          onChange={url => onUpdate({ profileImageUrl: url || undefined })}
+        />
       </PanelField>
 
       <PanelField label="Emphasis">
@@ -1992,6 +2007,48 @@ function ConnectionsList({ relationships }: { relationships: RelationshipList })
   )
 }
 
+function AppearanceField({ value, onChange }: { value?: string; onChange: (url: string) => void }) {
+  const [previewFailed, setPreviewFailed] = useState(false)
+  useEffect(() => { setPreviewFailed(false) }, [value])
+  const showPreview = Boolean(value) && !previewFailed
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+      <span style={{ fontSize: 11, fontWeight: 600, color: '#71717a' }}>Profile Image URL</span>
+      <input
+        value={value ?? ''}
+        onChange={e => onChange(e.target.value)}
+        placeholder="https://…"
+        style={inputStyle}
+      />
+      {value && (
+        <div style={{ display: 'flex', alignItems: 'flex-start', gap: 10 }}>
+          <div style={{
+            width: 56, height: 56, borderRadius: '50%', overflow: 'hidden',
+            border: '2px solid #e4e4e7', flexShrink: 0,
+            background: '#f4f4f5', display: 'flex', alignItems: 'center', justifyContent: 'center',
+          }}>
+            {showPreview
+              ? <img src={value} alt="" onError={() => setPreviewFailed(true)}
+                  style={{ width: '100%', height: '100%', objectFit: 'cover', display: 'block' }} />
+              : <span style={{ fontSize: 9, color: '#a1a1aa', textAlign: 'center', padding: 4 }}>
+                  {previewFailed ? 'Failed' : '…'}
+                </span>
+            }
+          </div>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 6, flex: 1 }}>
+            <button onClick={() => window.open(value, '_blank', 'noopener')} style={appearanceBtn}>
+              Open Link
+            </button>
+            <button onClick={() => onChange('')} style={{ ...appearanceBtn, color: '#ef4444' }}>
+              Clear
+            </button>
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}
+
 function PanelField({ label, children }: { label: string; children: React.ReactNode }) {
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
@@ -2066,6 +2123,13 @@ const inputStyle: React.CSSProperties = {
   border: '1px solid #d4d4d8', borderRadius: 6,
   fontSize: 14, color: '#18181b', background: '#fff',
   width: '100%', boxSizing: 'border-box', outline: 'none',
+}
+
+const appearanceBtn: React.CSSProperties = {
+  padding: '5px 10px', background: '#fff',
+  border: '1px solid #d4d4d8', borderRadius: 6,
+  fontSize: 12, color: '#3f3f46', cursor: 'pointer',
+  fontWeight: 600, textAlign: 'left', width: '100%',
 }
 
 const dropdownMenu: React.CSSProperties = {

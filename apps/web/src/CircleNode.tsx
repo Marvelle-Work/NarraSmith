@@ -1,4 +1,4 @@
-import { Fragment } from 'react'
+import { Fragment, useState, useEffect } from 'react'
 import { Handle, Position, type NodeProps } from '@xyflow/react'
 import type { GraphNode } from './types'
 import { entityColors, SIZE_LEVELS } from './types'
@@ -29,12 +29,16 @@ export function CircleNode({ data, selected }: NodeProps<GraphNode>) {
   const ring   = c ? `${c}44` : ec.ring
 
   const { diameter, fontSize } = SIZE_LEVELS[((data.sizeLevel ?? 3) - 1)]
-
   const diamondSize = diameter * 0.78
+
+  const [imgFailed, setImgFailed] = useState(false)
+  useEffect(() => { setImgFailed(false) }, [data.profileImageUrl])
+  const hasImage = Boolean(data.profileImageUrl) && !imgFailed
 
   const circle = (
     <div
       style={{
+        position: 'relative',
         width: diameter,
         height: diameter,
         borderRadius: '50%',
@@ -51,23 +55,47 @@ export function CircleNode({ data, selected }: NodeProps<GraphNode>) {
         transition: 'box-shadow 0.15s',
       }}
     >
-      <span
-        style={{
-          fontSize,
-          fontWeight: 600,
-          color: text,
-          textAlign: 'center',
-          wordBreak: 'break-word',
-          lineHeight: 1.3,
-          maxWidth: diameter - 16,
+      {/* Image clip container — separate div so overflow:hidden doesn't clip handles */}
+      {data.profileImageUrl && !imgFailed && (
+        <div style={{
+          position: 'absolute',
+          inset: 0,
+          borderRadius: '50%',
           overflow: 'hidden',
-          display: '-webkit-box',
-          WebkitLineClamp: 3,
-          WebkitBoxOrient: 'vertical',
-        }}
-      >
-        {data.label}
-      </span>
+          zIndex: 0,
+        }}>
+          <img
+            src={data.profileImageUrl}
+            alt=""
+            loading="lazy"
+            onError={() => setImgFailed(true)}
+            style={{ width: '100%', height: '100%', objectFit: 'cover', display: 'block' }}
+          />
+        </div>
+      )}
+
+      {/* Label — shown only when no image is active */}
+      {!hasImage && (
+        <span
+          style={{
+            position: 'relative',
+            zIndex: 1,
+            fontSize,
+            fontWeight: 600,
+            color: text,
+            textAlign: 'center',
+            wordBreak: 'break-word',
+            lineHeight: 1.3,
+            maxWidth: diameter - 16,
+            overflow: 'hidden',
+            display: '-webkit-box',
+            WebkitLineClamp: 3,
+            WebkitBoxOrient: 'vertical',
+          }}
+        >
+          {data.label}
+        </span>
+      )}
 
       {([
         ['Top', 'north'],
@@ -83,10 +111,41 @@ export function CircleNode({ data, selected }: NodeProps<GraphNode>) {
     </div>
   )
 
-  if (!data.isRoot) return circle
+  // Label rendered below the circle when an image occupies the interior
+  const imageLabel = (
+    <div
+      style={{
+        position: 'absolute',
+        top: diameter + 5,
+        left: '50%',
+        transform: 'translateX(-50%)',
+        width: diameter + 24,
+        textAlign: 'center',
+        fontSize: Math.max(fontSize - 1, 9),
+        fontWeight: 600,
+        color: '#18181b',
+        whiteSpace: 'nowrap',
+        overflow: 'hidden',
+        textOverflow: 'ellipsis',
+        pointerEvents: 'none',
+        lineHeight: 1.3,
+      }}
+    >
+      {data.label}
+    </div>
+  )
+
+  if (!data.isRoot) {
+    if (!hasImage) return circle
+    return (
+      <div style={{ position: 'relative', width: diameter, height: diameter }}>
+        {circle}
+        {imageLabel}
+      </div>
+    )
+  }
 
   const diamondColor = c ? darken(c) : border
-
   return (
     <div style={{
       position: 'relative',
@@ -107,6 +166,7 @@ export function CircleNode({ data, selected }: NodeProps<GraphNode>) {
         opacity: c ? 1 : 0.5,
         pointerEvents: 'none',
       }} />
+      {hasImage && imageLabel}
     </div>
   )
 }
