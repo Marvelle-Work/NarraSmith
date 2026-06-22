@@ -11,14 +11,6 @@ function isLight(hex: string): boolean {
   return (r * 299 + g * 587 + b * 114) / 1000 > 160
 }
 
-function darken(hex: string, amount = 0.35): string {
-  if (hex.length < 7) return hex
-  const r = Math.max(0, Math.round(parseInt(hex.slice(1, 3), 16) * (1 - amount)))
-  const g = Math.max(0, Math.round(parseInt(hex.slice(3, 5), 16) * (1 - amount)))
-  const b = Math.max(0, Math.round(parseInt(hex.slice(5, 7), 16) * (1 - amount)))
-  return `#${r.toString(16).padStart(2, '0')}${g.toString(16).padStart(2, '0')}${b.toString(16).padStart(2, '0')}`
-}
-
 export function CircleNode({ data, selected }: NodeProps<GraphNode>) {
   const ec = entityColors(data.entityType)
   const c = data.color
@@ -29,11 +21,12 @@ export function CircleNode({ data, selected }: NodeProps<GraphNode>) {
   const ring   = c ? `${c}44` : ec.ring
 
   const { diameter, fontSize } = SIZE_LEVELS[((data.sizeLevel ?? 3) - 1)]
-  const diamondSize = diameter * 0.78
 
   const [imgFailed, setImgFailed] = useState(false)
   useEffect(() => { setImgFailed(false) }, [data.profileImageUrl])
   const hasImage = Boolean(data.profileImageUrl) && !imgFailed
+
+  const labelCol = data.labelColor ?? (hasImage ? '#18181b' : text)
 
   const circle = (
     <div
@@ -82,7 +75,7 @@ export function CircleNode({ data, selected }: NodeProps<GraphNode>) {
             zIndex: 1,
             fontSize,
             fontWeight: 600,
-            color: text,
+            color: labelCol,
             textAlign: 'center',
             wordBreak: 'break-word',
             lineHeight: 1.3,
@@ -123,7 +116,7 @@ export function CircleNode({ data, selected }: NodeProps<GraphNode>) {
         textAlign: 'center',
         fontSize: Math.max(fontSize - 1, 9),
         fontWeight: 600,
-        color: '#18181b',
+        color: labelCol,
         whiteSpace: 'nowrap',
         overflow: 'hidden',
         textOverflow: 'ellipsis',
@@ -145,27 +138,19 @@ export function CircleNode({ data, selected }: NodeProps<GraphNode>) {
     )
   }
 
-  const diamondColor = c ? darken(c) : border
+  // Root node: outer glow ring instead of diamond
+  const glowColor = data.rootGlowColor ?? border
+  const glowShadow = `0 0 0 3px ${glowColor}, 0 0 20px 8px ${glowColor}66`
+
   return (
     <div style={{
       position: 'relative',
       width: diameter,
       height: diameter,
-      display: 'flex',
-      alignItems: 'center',
-      justifyContent: 'center',
+      borderRadius: '50%',
+      boxShadow: glowShadow,
     }}>
       {circle}
-      <div style={{
-        position: 'absolute',
-        width: diamondSize,
-        height: diamondSize,
-        border: `2.5px solid ${diamondColor}`,
-        borderRadius: 4,
-        transform: 'rotate(45deg)',
-        opacity: c ? 1 : 0.5,
-        pointerEvents: 'none',
-      }} />
       {hasImage && imageLabel}
     </div>
   )

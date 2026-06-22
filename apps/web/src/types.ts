@@ -35,6 +35,8 @@ export type NodeData = {
   concepts?: Record<string, ConceptInstance[]>
   isRoot?: boolean
   profileImageUrl?: string
+  labelColor?: string
+  rootGlowColor?: string
 }
 
 export type GraphNode = Node<NodeData>

@@ -90,6 +90,8 @@ function normalizeGraph(raw: { nodes: any[]; edges: any[]; rootNodeId?: string }
         concepts:        n.data.concepts,
         isRoot:          n.id === rootId || undefined,
         profileImageUrl: n.data.profileImageUrl,
+        labelColor:      n.data.labelColor,
+        rootGlowColor:   n.data.rootGlowColor,
       } satisfies NodeData,
     }))
   const assetNodes = raw.nodes
@@ -1451,6 +1453,8 @@ function StoryEntityPanel({ node, schemaTypes, conceptSchemas, resolvedFields, r
         <AppearanceField
           value={node.data.profileImageUrl}
           onChange={url => onUpdate({ profileImageUrl: url || undefined })}
+          labelColor={node.data.labelColor}
+          onChangeLabelColor={color => onUpdate({ labelColor: color || undefined })}
         />
       </PanelField>
 
@@ -1529,6 +1533,15 @@ function StoryEntityPanel({ node, schemaTypes, conceptSchemas, resolvedFields, r
         />
       </PanelField>
 
+      {isRoot && (
+        <PanelField label="Glow Color">
+          <ColorPicker
+            value={node.data.rootGlowColor}
+            onChange={color => onUpdate({ rootGlowColor: color || undefined })}
+          />
+        </PanelField>
+      )}
+
       <button onClick={onToggleRoot} style={rootToggleBtn(isRoot)}>
         {isRoot ? '◆ Root Node' : '◇ Set as Root'}
       </button>
@@ -1588,6 +1601,8 @@ function SystemEntityPanel({ node, schemaTypes, conceptSchemas, resolvedFields, 
         <AppearanceField
           value={node.data.profileImageUrl}
           onChange={url => onUpdate({ profileImageUrl: url || undefined })}
+          labelColor={node.data.labelColor}
+          onChangeLabelColor={color => onUpdate({ labelColor: color || undefined })}
         />
       </PanelField>
 
@@ -1682,6 +1697,15 @@ function SystemEntityPanel({ node, schemaTypes, conceptSchemas, resolvedFields, 
           onTogglePin={onToggleAssetPin}
         />
       </PanelField>
+
+      {isRoot && (
+        <PanelField label="Glow Color">
+          <ColorPicker
+            value={node.data.rootGlowColor}
+            onChange={color => onUpdate({ rootGlowColor: color || undefined })}
+          />
+        </PanelField>
+      )}
 
       <button onClick={onToggleRoot} style={rootToggleBtn(isRoot)}>
         {isRoot ? '◆ Root Node' : '◇ Set as Root'}
@@ -2007,44 +2031,57 @@ function ConnectionsList({ relationships }: { relationships: RelationshipList })
   )
 }
 
-function AppearanceField({ value, onChange }: { value?: string; onChange: (url: string) => void }) {
+function AppearanceField({
+  value, onChange, labelColor, onChangeLabelColor,
+}: {
+  value?: string
+  onChange: (url: string) => void
+  labelColor?: string
+  onChangeLabelColor: (color: string) => void
+}) {
   const [previewFailed, setPreviewFailed] = useState(false)
   useEffect(() => { setPreviewFailed(false) }, [value])
   const showPreview = Boolean(value) && !previewFailed
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-      <span style={{ fontSize: 11, fontWeight: 600, color: '#71717a' }}>Profile Image URL</span>
-      <input
-        value={value ?? ''}
-        onChange={e => onChange(e.target.value)}
-        placeholder="https://…"
-        style={inputStyle}
-      />
-      {value && (
-        <div style={{ display: 'flex', alignItems: 'flex-start', gap: 10 }}>
-          <div style={{
-            width: 56, height: 56, borderRadius: '50%', overflow: 'hidden',
-            border: '2px solid #e4e4e7', flexShrink: 0,
-            background: '#f4f4f5', display: 'flex', alignItems: 'center', justifyContent: 'center',
-          }}>
-            {showPreview
-              ? <img src={value} alt="" onError={() => setPreviewFailed(true)}
-                  style={{ width: '100%', height: '100%', objectFit: 'cover', display: 'block' }} />
-              : <span style={{ fontSize: 9, color: '#a1a1aa', textAlign: 'center', padding: 4 }}>
-                  {previewFailed ? 'Failed' : '…'}
-                </span>
-            }
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+        <span style={{ fontSize: 11, fontWeight: 600, color: '#71717a' }}>Label Color</span>
+        <ColorPicker value={labelColor} onChange={onChangeLabelColor} />
+      </div>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+        <span style={{ fontSize: 11, fontWeight: 600, color: '#71717a' }}>Profile Image URL</span>
+        <input
+          value={value ?? ''}
+          onChange={e => onChange(e.target.value)}
+          placeholder="https://…"
+          style={inputStyle}
+        />
+        {value && (
+          <div style={{ display: 'flex', alignItems: 'flex-start', gap: 10 }}>
+            <div style={{
+              width: 56, height: 56, borderRadius: '50%', overflow: 'hidden',
+              border: '2px solid #e4e4e7', flexShrink: 0,
+              background: '#f4f4f5', display: 'flex', alignItems: 'center', justifyContent: 'center',
+            }}>
+              {showPreview
+                ? <img src={value} alt="" onError={() => setPreviewFailed(true)}
+                    style={{ width: '100%', height: '100%', objectFit: 'cover', display: 'block' }} />
+                : <span style={{ fontSize: 9, color: '#a1a1aa', textAlign: 'center', padding: 4 }}>
+                    {previewFailed ? 'Failed' : '…'}
+                  </span>
+              }
+            </div>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 6, flex: 1 }}>
+              <button onClick={() => window.open(value, '_blank', 'noopener')} style={appearanceBtn}>
+                Open Link
+              </button>
+              <button onClick={() => onChange('')} style={{ ...appearanceBtn, color: '#ef4444' }}>
+                Clear
+              </button>
+            </div>
           </div>
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 6, flex: 1 }}>
-            <button onClick={() => window.open(value, '_blank', 'noopener')} style={appearanceBtn}>
-              Open Link
-            </button>
-            <button onClick={() => onChange('')} style={{ ...appearanceBtn, color: '#ef4444' }}>
-              Clear
-            </button>
-          </div>
-        </div>
-      )}
+        )}
+      </div>
     </div>
   )
 }
