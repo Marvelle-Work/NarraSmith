@@ -3,7 +3,7 @@ import type { CommandId, CommandPayload } from './commands'
 
 export type ContextMenuTarget =
   | { type: 'canvas'; position: { x: number; y: number } }
-  | { type: 'node'; nodeId: string; nodeType: 'entity' | 'asset' | 'canvas-image' }
+  | { type: 'node'; nodeId: string; nodeType: 'entity' | 'asset' | 'canvas-image'; position?: { x: number; y: number } }
   | { type: 'edge'; edgeId: string }
 
 export type ContextMenuItem = {
@@ -115,11 +115,20 @@ export const ASSET_ITEMS: ContextMenuItem[] = [
   { commandId: 'asset.delete', label: 'Delete Asset', color: '#dc2626', dividerBefore: true, payloadFromTarget: assetIdFromNode },
 ]
 
+const nodePosition = (t: ContextMenuTarget) =>
+  t.type === 'node' && t.position ? { position: t.position } : EMPTY
+
 export const CANVAS_IMAGE_ITEMS: ContextMenuItem[] = [
-  { commandId: 'canvas-image.select', label: 'Edit', payloadFromTarget: canvasImgId },
+  { commandId: 'canvas-image.select', label: 'Edit Image', payloadFromTarget: canvasImgId },
+  { commandId: 'canvas-image.drag', label: 'Drag Image', payloadFromTarget: canvasImgId },
   { commandId: 'canvas-image.toggle-lock', label: 'Toggle Lock', payloadFromTarget: canvasImgId },
-  { commandId: 'canvas-image.duplicate', label: 'Duplicate', payloadFromTarget: canvasImgId },
-  { commandId: 'canvas-image.delete', label: 'Delete', color: '#dc2626', dividerBefore: true, payloadFromTarget: canvasImgId },
+  { commandId: 'canvas-image.duplicate', label: 'Duplicate Image', payloadFromTarget: canvasImgId },
+  { commandId: 'canvas-image.delete', label: 'Delete Image', color: '#dc2626', payloadFromTarget: canvasImgId },
+  { commandId: 'entity.create', label: 'New Entity', dividerBefore: true, payloadFromTarget: nodePosition },
+  { commandId: 'asset.create', label: 'New Asset', payloadFromTarget: () => EMPTY },
+  { commandId: 'canvas-image.insert', label: 'Insert Canvas Image', payloadFromTarget: nodePosition },
+  { commandId: 'ui.world-index', label: 'World Index', dividerBefore: true, payloadFromTarget: () => EMPTY },
+  { commandId: 'ui.asset-index', label: 'Assets', payloadFromTarget: () => EMPTY },
 ]
 
 export const EDGE_ITEMS: ContextMenuItem[] = [

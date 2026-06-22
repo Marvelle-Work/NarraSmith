@@ -1,4 +1,3 @@
-import { Fragment } from 'react'
 import { Handle, Position, type NodeProps, type Node } from '@xyflow/react'
 import type { AssetNodeData } from './types'
 
@@ -43,25 +42,19 @@ export function AssetNode({ data, selected }: NodeProps<AssetGraphNode>) {
         {data.entryCount} {data.entryCount === 1 ? 'entry' : 'entries'}
       </div>
 
-      {([
-        ['Top', 'north'],
-        ['Right', 'east'],
-        ['Bottom', 'south'],
-        ['Left', 'west'],
-      ] as const).map(([pos, hid]) => (
-        <Fragment key={hid}>
-          <Handle type="source" id={hid} position={Position[pos]} style={handleStyle} />
-          <Handle type="target" id={hid} position={Position[pos]} style={handleStyle} />
-        </Fragment>
-      ))}
+      {/* Hidden handles for tether edge rendering — not user-interactive */}
+      <Handle type="source" id="north" position={Position.Top} isConnectableStart={false} style={hiddenHandle} />
+      <Handle type="source" id="east" position={Position.Right} isConnectableStart={false} style={hiddenHandle} />
+      <Handle type="source" id="south" position={Position.Bottom} isConnectableStart={false} style={hiddenHandle} />
+      <Handle type="source" id="west" position={Position.Left} isConnectableStart={false} style={hiddenHandle} />
     </div>
   )
 }
 
-const handleStyle: React.CSSProperties = {
-  width: 6,
-  height: 6,
-  background: '#6366f1',
-  border: '2px solid #fff',
-  borderRadius: '50%',
+const hiddenHandle: React.CSSProperties = {
+  width: 0,
+  height: 0,
+  background: 'transparent',
+  border: 'none',
+  pointerEvents: 'none',
 }

@@ -105,7 +105,8 @@ function normalizeGraph(raw: { nodes: any[]; edges: any[]; rootNodeId?: string }
       ...n,
       type: 'canvas-image',
       position: n.position ?? { x: 0, y: 0 },
-      draggable: !(n.data?.locked),
+      draggable: false,
+      selectable: true,
       zIndex: (n.data?.zIndex ?? 0) - 1000,
       data: n.data,
     }))
@@ -426,16 +427,38 @@ export function GraphEditor({ projectId, onBackToDashboard }: GraphEditorProps) 
     createEntityAt(screenToFlowPosition({ x: e.clientX, y: e.clientY }))
   }, [screenToFlowPosition, createEntityAt])
 
+  // ── Canvas image drag mode ─────────────────────────────────────────
+  const [draggingImageId, setDraggingImageId] = useState<string | null>(null)
+
+  const enterImageDragMode = useCallback((ciId: string) => {
+    setDraggingImageId(ciId)
+    setNodes(nds => nds.map(n =>
+      n.id === `canvas-img-${ciId}` ? { ...n, draggable: true } : n,
+    ))
+  }, [setNodes])
+
+  const exitImageDragMode = useCallback(() => {
+    if (!draggingImageId) return
+    setNodes(nds => nds.map(n =>
+      n.id === `canvas-img-${draggingImageId}` ? { ...n, draggable: false } : n,
+    ))
+    setDraggingImageId(null)
+  }, [draggingImageId, setNodes])
+
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       const tag = (e.target as HTMLElement).tagName
+      if (e.key === 'Escape' && draggingImageId) {
+        exitImageDragMode()
+        return
+      }
       if (e.key === 'Enter' && tag !== 'INPUT' && tag !== 'TEXTAREA'
           && !pendingConn && !showSchema && !showRelSchema)
         createEntityAtCenter()
     }
     document.addEventListener('keydown', onKey)
     return () => document.removeEventListener('keydown', onKey)
-  }, [createEntityAtCenter, pendingConn, showSchema, showRelSchema])
+  }, [createEntityAtCenter, pendingConn, showSchema, showRelSchema, draggingImageId, exitImageDragMode])
 
   // ── Connections ───────────────────────────────────────────────────────
   const onConnect = useCallback((conn: Connection) => setPendingConn(conn), [])
@@ -473,7 +496,8 @@ export function GraphEditor({ projectId, onBackToDashboard }: GraphEditorProps) 
     setSelectedNodeId(null)
     setSelectedEdgeId(null)
     setCtxMenu(null)
-  }, [])
+    if (draggingImageId) exitImageDragMode()
+  }, [draggingImageId, exitImageDragMode])
 
   // ── Delete / reverse helpers ──────────────────────────────────────────
   const deleteEntity = useCallback((nodeId: string) => {
@@ -510,10 +534,11 @@ export function GraphEditor({ projectId, onBackToDashboard }: GraphEditorProps) 
   const onNodeContextMenu = useCallback((_e: MouseEvent | React.MouseEvent, node: GraphNode) => {
     _e.preventDefault()
     const nodeType = node.type === 'asset' ? 'asset' as const : node.type === 'canvas-image' ? 'canvas-image' as const : 'entity' as const
-    setCtxMenu({ x: _e.clientX, y: _e.clientY, target: { type: 'node', nodeId: node.id, nodeType } })
+    const flowPos = screenToFlowPosition({ x: _e.clientX, y: _e.clientY })
+    setCtxMenu({ x: _e.clientX, y: _e.clientY, target: { type: 'node', nodeId: node.id, nodeType, position: flowPos } })
     setSelectedNodeId(node.id)
     setSelectedEdgeId(null)
-  }, [])
+  }, [screenToFlowPosition])
 
   const onEdgeContextMenu = useCallback((_e: MouseEvent | React.MouseEvent, edge: Edge) => {
     _e.preventDefault()
@@ -673,12 +698,18 @@ export function GraphEditor({ projectId, onBackToDashboard }: GraphEditorProps) 
   }, [nodes, setNodes, setEdges])
 
   const linkAssetToEntity = useCallback((assetId: string, entityId: string) => {
-    setAssets(prev => prev.map(a =>
-      a.id === assetId && !a.linkedEntityIds.includes(entityId)
-        ? { ...a, linkedEntityIds: [...a.linkedEntityIds, entityId] }
-        : a,
-    ))
-  }, [])
+    setAssets(prev => {
+      const asset = prev.find(a => a.id === assetId)
+      if (!asset || asset.linkedEntityIds.includes(entityId)) return prev
+      if (asset.isPinnedOnCanvas) {
+        const tetherId = `tether-${assetId}-${entityId}`
+        setEdges(eds => eds.some(e => e.id === tetherId) ? eds : [...eds, {
+          id: tetherId, source: `asset-node-${assetId}`, target: entityId, type: 'tether',
+        }])
+      }
+      return prev.map(a => a.id === assetId ? { ...a, linkedEntityIds: [...a.linkedEntityIds, entityId] } : a)
+    })
+  }, [setEdges])
 
   const unlinkAssetFromEntity = useCallback((assetId: string, entityId: string) => {
     setAssets(prev => prev.map(a =>
@@ -686,7 +717,8 @@ export function GraphEditor({ projectId, onBackToDashboard }: GraphEditorProps) 
         ? { ...a, linkedEntityIds: a.linkedEntityIds.filter(id => id !== entityId) }
         : a,
     ))
-  }, [])
+    setEdges(eds => eds.filter(e => e.id !== `tether-${assetId}-${entityId}`))
+  }, [setEdges])
 
   const createStandaloneAsset = useCallback((asset: AssetData) => {
     addAsset(asset)
@@ -696,14 +728,14 @@ export function GraphEditor({ projectId, onBackToDashboard }: GraphEditorProps) 
   // ── Canvas image management ──────────────────────────────────────────
   const [showNewCanvasImage, setShowNewCanvasImage] = useState(false)
   const [newCanvasImagePos, setNewCanvasImagePos] = useState<{ x: number; y: number }>({ x: 0, y: 0 })
-
   const addCanvasImage = useCallback((ci: CanvasImage) => {
     setCanvasImages(prev => [...prev, ci])
     setNodes(nds => [...nds, {
       id: `canvas-img-${ci.id}`,
       type: 'canvas-image',
       position: { x: ci.x, y: ci.y },
-      draggable: !ci.locked,
+      draggable: false,
+      selectable: true,
       zIndex: ci.zIndex - 1000,
       data: {
         canvasImageId: ci.id, title: ci.title, imageUrl: ci.imageUrl,
@@ -719,7 +751,6 @@ export function GraphEditor({ projectId, onBackToDashboard }: GraphEditorProps) 
       if (n.id !== `canvas-img-${ci.id}`) return n
       return {
         ...n,
-        draggable: !ci.locked,
         data: {
           canvasImageId: ci.id, title: ci.title, imageUrl: ci.imageUrl,
           width: ci.width, height: ci.height, rotation: ci.rotation,
@@ -769,9 +800,10 @@ export function GraphEditor({ projectId, onBackToDashboard }: GraphEditorProps) 
       const ci = canvasImages.find(c => c.id === id)
       if (ci) updateCanvasImage({ ...ci, locked: !ci.locked })
     },
+    'canvas-image.drag': ({ id }) => enterImageDragMode(id),
     'ui.world-index': () => setShowIndex(true),
     'ui.asset-index': () => setShowAssetIndex(true),
-  }), [createEntityAt, deleteEntity, toggleAssetPin, removeAsset, reverseEdge, deleteEdge, deleteCanvasImage, duplicateCanvasImage, canvasImages, updateCanvasImage])
+  }), [createEntityAt, deleteEntity, toggleAssetPin, removeAsset, reverseEdge, deleteEdge, deleteCanvasImage, duplicateCanvasImage, canvasImages, updateCanvasImage, enterImageDragMode])
 
   const executeCommand = useMemo(() => createCommandExecutor(commandRegistry), [commandRegistry])
 
@@ -958,6 +990,16 @@ export function GraphEditor({ projectId, onBackToDashboard }: GraphEditorProps) 
         >
           <Background /><Controls /><MiniMap />
         </ReactFlow>
+        {draggingImageId && (
+          <div style={{
+            position: 'absolute', bottom: 60, left: '50%', transform: 'translateX(-50%)',
+            zIndex: 20, background: '#18181b', color: '#fff', padding: '6px 14px',
+            borderRadius: 8, fontSize: 12, fontWeight: 600, boxShadow: '0 4px 12px rgba(0,0,0,0.2)',
+            fontFamily: 'system-ui, sans-serif',
+          }}>
+            Dragging Canvas Image (ESC to cancel)
+          </div>
+        )}
       </div>
 
       {/* Inspector panel */}
@@ -987,7 +1029,7 @@ export function GraphEditor({ projectId, onBackToDashboard }: GraphEditorProps) 
               onUnlink={unlinkAssetFromEntity}
             />
           )}
-          {selectedNode && !isAssetNode && (story
+          {selectedNode && !isAssetNode && !isCanvasImageNode && (story
             ? <StoryEntityPanel
                 node={selectedNode} schemaTypes={schemaTypes} conceptSchemas={conceptSchema}
                 resolvedFields={resolvedFields} relationships={selectedRelationships}

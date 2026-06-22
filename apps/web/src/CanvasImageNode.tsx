@@ -15,9 +15,8 @@ export function CanvasImageNode({ data, selected }: NodeProps<CanvasImageGraphNo
         overflow: 'hidden',
         border: selected ? '2px solid #6366f1' : '2px solid transparent',
         boxShadow: selected ? '0 0 0 3px rgba(99,102,241,0.2)' : 'none',
-        cursor: data.locked ? 'default' : 'grab',
+        cursor: 'default',
         transition: 'border-color 0.15s, box-shadow 0.15s',
-        pointerEvents: 'all',
       }}
     >
       <img
@@ -29,13 +28,16 @@ export function CanvasImageNode({ data, selected }: NodeProps<CanvasImageGraphNo
           height: '100%',
           objectFit: 'cover',
           display: 'block',
+          pointerEvents: 'none',
         }}
         onError={e => {
-          (e.target as HTMLImageElement).style.display = 'none'
-          ;(e.target as HTMLImageElement).parentElement!.style.background = '#f4f4f5'
-          ;(e.target as HTMLImageElement).parentElement!.style.display = 'flex'
-          ;(e.target as HTMLImageElement).parentElement!.style.alignItems = 'center'
-          ;(e.target as HTMLImageElement).parentElement!.style.justifyContent = 'center'
+          const el = e.target as HTMLImageElement
+          el.style.display = 'none'
+          const parent = el.parentElement!
+          parent.style.background = '#f4f4f5'
+          parent.style.display = 'flex'
+          parent.style.alignItems = 'center'
+          parent.style.justifyContent = 'center'
         }}
       />
       {selected && (
