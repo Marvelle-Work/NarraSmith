@@ -32,6 +32,7 @@ import { WorldIndexPanel } from './WorldIndexPanel'
 import { AssetNode } from './AssetNode'
 import { AssetEditor } from './AssetEditor'
 import { AssetIndexPanel } from './AssetIndexPanel'
+import { PlayButton } from './PlayButton'
 import { TetherEdge } from './TetherEdge'
 import type { AssetData, AssetNodeData } from './types'
 import { isUrl } from './types'
@@ -69,35 +70,50 @@ const DEFAULT_GRAPH: { nodes: GraphNode[]; edges: Edge[] } = {
 function normalizeGraph(raw: { nodes: any[]; edges: any[]; rootNodeId?: string }): { nodes: GraphNode[]; edges: Edge[] } {
   if (!raw.nodes || raw.nodes.length === 0) return DEFAULT_GRAPH
   const rootId = raw.rootNodeId
-  const nodes: GraphNode[] = raw.nodes.map((n: any, i: number) => ({
-    ...n,
-    type: 'circle',
-    position: n.position ?? { x: 100 + (i % 5) * 200, y: 100 + Math.floor(i / 5) * 200 },
-    data: {
-      label:       n.data.label ?? 'Untitled',
-      entityType:  n.data.entityType ?? n.data.category ?? 'Character',
-      typeId:      n.data.typeId,
-      fields:      n.data.fields ?? {},
-      description: n.data.description ?? '',
-      color:       n.data.color,
-      sizeLevel:   (n.data.sizeLevel as SizeLevel | undefined) ?? 3,
-      concepts:    n.data.concepts,
-      isRoot:      n.id === rootId || undefined,
-    } satisfies NodeData,
-  }))
-  const edges: Edge[] = raw.edges.map((e: any) => ({
-    ...e,
-    type: 'relationship',
-    data: {
-      labelT:             e.data?.labelT ?? 0.5,
-      color:              e.data?.color,
-      schemaColor:        e.data?.schemaColor,
-      relationshipTypeId: e.data?.relationshipTypeId,
-      description:        e.data?.description,
-      whyItMatters:       e.data?.whyItMatters,
-    },
-  }))
-  return { nodes, edges }
+  const nodes: GraphNode[] = raw.nodes
+    .filter((n: any) => n.type !== 'asset')
+    .map((n: any, i: number) => ({
+      ...n,
+      type: 'circle',
+      position: n.position ?? { x: 100 + (i % 5) * 200, y: 100 + Math.floor(i / 5) * 200 },
+      data: {
+        label:       n.data.label ?? 'Untitled',
+        entityType:  n.data.entityType ?? n.data.category ?? 'Character',
+        typeId:      n.data.typeId,
+        fields:      n.data.fields ?? {},
+        description: n.data.description ?? '',
+        color:       n.data.color,
+        sizeLevel:   (n.data.sizeLevel as SizeLevel | undefined) ?? 3,
+        concepts:    n.data.concepts,
+        isRoot:      n.id === rootId || undefined,
+      } satisfies NodeData,
+    }))
+  const assetNodes = raw.nodes
+    .filter((n: any) => n.type === 'asset')
+    .map((n: any) => ({
+      ...n,
+      type: 'asset',
+      position: n.position ?? { x: 200, y: 200 },
+      data: n.data,
+    }))
+  const edges: Edge[] = raw.edges
+    .filter((e: any) => e.type !== 'tether')
+    .map((e: any) => ({
+      ...e,
+      type: 'relationship',
+      data: {
+        labelT:             e.data?.labelT ?? 0.5,
+        color:              e.data?.color,
+        schemaColor:        e.data?.schemaColor,
+        relationshipTypeId: e.data?.relationshipTypeId,
+        description:        e.data?.description,
+        whyItMatters:       e.data?.whyItMatters,
+      },
+    }))
+  const tetherEdges: Edge[] = raw.edges
+    .filter((e: any) => e.type === 'tether')
+    .map((e: any) => ({ ...e, type: 'tether' }))
+  return { nodes: [...nodes, ...assetNodes] as any, edges: [...edges, ...tetherEdges] }
 }
 
 // ── Edge style resolution ────────────────────────────────────────────────
@@ -268,6 +284,14 @@ export function GraphEditor({ projectId, onBackToDashboard }: GraphEditorProps) 
   useEffect(() => {
     if (!cloudLoadedRef.current) return
 
+    // Sync canvas positions back to assets before persisting
+    const syncedAssets = assets.map(a => {
+      if (!a.isPinnedOnCanvas) return a
+      const canvasNode = nodes.find(n => n.id === `asset-node-${a.id}`)
+      if (!canvasNode) return a
+      return { ...a, position: { x: canvasNode.position.x, y: canvasNode.position.y } }
+    })
+
     const current = storeRef.current
     const next: ProjectStore = {
       ...current,
@@ -280,7 +304,7 @@ export function GraphEditor({ projectId, onBackToDashboard }: GraphEditorProps) 
           entitySchema: schemaTypes,
           relSchema: relTypes,
           conceptSchema,
-          assets,
+          assets: syncedAssets,
           updatedAt: new Date().toISOString(),
         },
       },
@@ -1501,6 +1525,9 @@ function AssetInspectorPanel({ asset, nodes, onUpdate, onRemove, onTogglePin, on
                   placeholder="URL or text"
                   style={{ ...inputStyle, flex: 1, fontSize: 12, padding: '4px 7px' }}
                 />
+                {entry.type === 'music' && entry.isLinkified && (
+                  <PlayButton url={entry.value} title={entry.label || asset.title} />
+                )}
                 {entry.isLinkified && (
                   <a href={entry.value} target="_blank" rel="noopener noreferrer"
                     style={{ fontSize: 10, color: '#6366f1', whiteSpace: 'nowrap', textDecoration: 'none' }}>Open</a>

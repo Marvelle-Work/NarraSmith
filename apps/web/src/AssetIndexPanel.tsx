@@ -1,6 +1,7 @@
 import { useState, useMemo } from 'react'
 import type { AssetData, AssetEntry, AssetEntryType, GraphNode } from './types'
 import { isUrl } from './types'
+import { PlayButton } from './PlayButton'
 
 type Props = {
   assets: AssetData[]
@@ -137,6 +138,9 @@ export function AssetIndexPanel({ assets, nodes, onUpdate, onRemove, onTogglePin
                           placeholder="URL or text"
                           style={{ ...formInput, flex: 1, fontSize: 11 }}
                         />
+                        {entry.type === 'music' && entry.isLinkified && (
+                          <PlayButton url={entry.value} title={entry.label || asset.title} />
+                        )}
                         {entry.isLinkified && (
                           <a href={entry.value} target="_blank" rel="noopener noreferrer"
                             style={{ fontSize: 10, color: '#6366f1', whiteSpace: 'nowrap' }}>Open</a>

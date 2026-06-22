@@ -105,13 +105,50 @@ export async function rebuildProjectSnapshot(
       : {}),
   }))
 
+  // Pinned assets become canvas nodes + tether edges
+  const assetCanvasNodes = assets
+    .filter(a => a.isPinnedOnCanvas && a.position)
+    .map(a => {
+      const entries = Array.isArray(a.entries) ? a.entries as any[] : []
+      const summary = entries.slice(0, 3).map((e: any) => e.label || e.type).join(', ')
+      return {
+        id: `asset-node-${a.id}`,
+        type: 'asset',
+        position: a.position,
+        data: {
+          assetId: a.id,
+          title: a.title,
+          entryCount: entries.length,
+          entrySummary: summary,
+        },
+      }
+    })
+
+  const tetherEdges = assets
+    .filter(a => a.isPinnedOnCanvas)
+    .flatMap(a => {
+      const linkedIds = Array.isArray(a.linkedEntityIds) ? a.linkedEntityIds as string[] : []
+      const existingNodeIds = new Set(graphNodes.map((n: any) => n.id))
+      return linkedIds
+        .filter(eid => existingNodeIds.has(eid))
+        .map(eid => ({
+          id: `tether-${a.id}-${eid}`,
+          source: `asset-node-${a.id}`,
+          target: eid,
+          type: 'tether',
+        }))
+    })
+
   const now = new Date().toISOString()
   return {
     id: projectId,
     name: projectRes.data?.name ?? 'Project',
     createdAt: projectRes.data?.created_at ?? now,
     updatedAt: now,
-    graph: { nodes: graphNodes, edges: graphEdges },
+    graph: {
+      nodes: [...graphNodes, ...assetCanvasNodes],
+      edges: [...graphEdges, ...tetherEdges],
+    },
     entitySchema,
     relSchema,
     conceptSchema,

@@ -257,13 +257,14 @@ export default async function syncRoutes(app: FastifyInstance) {
         }
       }
 
-      // ── 5. Upsert nodes ──────────────────────────────────────────────
+      // ── 5. Upsert nodes (entity nodes only — asset canvas nodes live in asset_nodes)
       const nodeClientToUuid = new Map<string, string>()
+      const entityNodes = graph.nodes.filter(n => !n.id.startsWith('asset-node-'))
 
-      if (graph.nodes.length > 0) {
+      if (entityNodes.length > 0) {
         const fallbackTypeUuid = nodeTypeClientToUuid.values().next().value
 
-        const rows = graph.nodes.map(n => {
+        const rows = entityNodes.map(n => {
           const typeUuid = n.data.typeId
             ? nodeTypeClientToUuid.get(n.data.typeId)
             : undefined
@@ -299,11 +300,12 @@ export default async function syncRoutes(app: FastifyInstance) {
         }
       }
 
-      // ── 6. Upsert relationships ──────────────────────────────────────
-      if (graph.edges.length > 0) {
+      // ── 6. Upsert relationships (skip tether edges — they're derived from asset links)
+      const relEdges = graph.edges.filter(e => !e.id.startsWith('tether-'))
+      if (relEdges.length > 0) {
         const fallbackRelTypeUuid = relTypeClientToUuid.values().next().value
 
-        const rows = graph.edges
+        const rows = relEdges
           .filter(e => nodeClientToUuid.has(e.source) && nodeClientToUuid.has(e.target))
           .map(e => {
             const relTypeUuid = e.data?.relationshipTypeId
@@ -340,8 +342,8 @@ export default async function syncRoutes(app: FastifyInstance) {
       }
 
       // ── 7. Delete removed records (FK-safe order) ────────────────────
-      const incomingRelClientIds = new Set(graph.edges.map(e => e.id))
-      const incomingNodeClientIds = new Set(graph.nodes.map(n => n.id))
+      const incomingRelClientIds = new Set(relEdges.map(e => e.id))
+      const incomingNodeClientIds = new Set(entityNodes.map(n => n.id))
       const incomingNodeTypeClientIds = new Set(entitySchema.map(s => s.id))
       const incomingRelTypeClientIds = new Set(relSchema.map(s => s.id))
       const incomingConceptClientIds = new Set(conceptSchema.map(s => s.id))

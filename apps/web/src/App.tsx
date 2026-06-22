@@ -7,6 +7,8 @@ import { LoginPage } from './auth/LoginPage'
 import { SignupPage } from './auth/SignupPage'
 import { SharedProjectViewer } from './SharedProjectViewer'
 import { useLocalDataMigration } from './hooks/useLocalDataMigration'
+import { AudioProvider } from './AudioContext'
+import { MiniPlayer } from './MiniPlayer'
 
 type View =
   | { kind: 'login' }
@@ -74,8 +76,11 @@ function AppInner() {
 
 export default function App() {
   return (
-    <AuthProvider>
-      <AppInner />
-    </AuthProvider>
+    <AudioProvider>
+      <AuthProvider>
+        <AppInner />
+        <MiniPlayer />
+      </AuthProvider>
+    </AudioProvider>
   )
 }
