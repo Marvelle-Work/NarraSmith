@@ -489,8 +489,31 @@ export function GraphEditor({ projectId, onBackToDashboard }: GraphEditorProps) 
 
   // ── Asset management ──────────────────────────────────────────────────
   const addAsset = useCallback((asset: AssetData) => {
-    setAssets(prev => [...prev, asset])
-  }, [])
+    const shouldPin = asset.isPinnedOnCanvas
+    const pos = shouldPin
+      ? (asset.position ?? screenToFlowPosition({ x: window.innerWidth / 2, y: window.innerHeight / 2 }))
+      : asset.position
+    const saved = { ...asset, position: pos }
+    setAssets(prev => [...prev, saved])
+    if (shouldPin && pos) {
+      const summary = asset.entries.slice(0, 3).map(e => e.label || e.type).join(', ')
+      setNodes(nds => [...nds, {
+        id: `asset-node-${asset.id}`,
+        type: 'asset',
+        position: pos,
+        data: { assetId: asset.id, title: asset.title, entryCount: asset.entries.length, entrySummary: summary },
+      } as any])
+      const tetherEdges: Edge[] = asset.linkedEntityIds
+        .filter(eid => nodes.some(n => n.id === eid))
+        .map(eid => ({
+          id: `tether-${asset.id}-${eid}`,
+          source: `asset-node-${asset.id}`,
+          target: eid,
+          type: 'tether',
+        }))
+      if (tetherEdges.length > 0) setEdges(eds => [...eds, ...tetherEdges])
+    }
+  }, [screenToFlowPosition, setNodes, setEdges, nodes])
 
   const updateAsset = useCallback((asset: AssetData) => {
     setAssets(prev => prev.map(a => a.id === asset.id ? asset : a))
@@ -505,7 +528,8 @@ export function GraphEditor({ projectId, onBackToDashboard }: GraphEditorProps) 
     setAssets(prev => prev.filter(a => a.id !== assetId))
     setNodes(nds => nds.filter(n => !(n.type === 'asset' && (n.data as unknown as AssetNodeData).assetId === assetId)))
     setEdges(eds => eds.filter(e => !e.id.startsWith(`tether-${assetId}-`)))
-  }, [setNodes, setEdges])
+    if (selectedNodeId === `asset-node-${assetId}`) setSelectedNodeId(null)
+  }, [setNodes, setEdges, selectedNodeId])
 
   const toggleAssetPin = useCallback((assetId: string) => {
     setAssets(prev => prev.map(a => {
@@ -562,18 +586,9 @@ export function GraphEditor({ projectId, onBackToDashboard }: GraphEditorProps) 
   }, [])
 
   const createStandaloneAsset = useCallback((asset: AssetData) => {
-    const pos = screenToFlowPosition({ x: window.innerWidth / 2, y: window.innerHeight / 2 })
-    const pinned = { ...asset, isPinnedOnCanvas: true, position: pos }
-    setAssets(prev => [...prev, pinned])
-    const summary = asset.entries.slice(0, 3).map(e => e.label || e.type).join(', ')
-    setNodes(nds => [...nds, {
-      id: `asset-node-${asset.id}`,
-      type: 'asset',
-      position: pos,
-      data: { assetId: asset.id, title: asset.title, entryCount: asset.entries.length, entrySummary: summary },
-    } as any])
+    addAsset(asset)
     setShowNewAsset(false)
-  }, [screenToFlowPosition, setNodes])
+  }, [addAsset])
 
   // Close dropdowns on any outside click
   useEffect(() => {
@@ -910,7 +925,7 @@ function NewAssetModal({ onAdd, onCancel }: { onAdd: (a: AssetData) => void; onC
       id: `asset-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
       title: title.trim() || tmpl.label,
       linkedEntityIds: [],
-      isPinnedOnCanvas: false,
+      isPinnedOnCanvas: true,
       entries: tmpl.entries.map(e => ({ ...e, id: eid() })),
     })
   }

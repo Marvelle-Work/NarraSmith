@@ -64,7 +64,7 @@ export function AssetEditor({ assets, entityId, onAdd, onUpdate, onLink, onUnlin
       id: assetId(),
       title: tmpl.label === 'Custom' ? 'Untitled Asset' : tmpl.label,
       linkedEntityIds: [entityId],
-      isPinnedOnCanvas: false,
+      isPinnedOnCanvas: true,
       entries: tmpl.entries.map(e => ({ ...e, id: entryId() })),
     }
     onAdd(asset)
