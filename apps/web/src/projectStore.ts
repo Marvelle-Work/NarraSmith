@@ -228,8 +228,8 @@ export function createProjectFromTemplate(store: ProjectStore, template: Project
     entitySchema: JSON.parse(JSON.stringify(template.entitySchema)),
     relSchema: JSON.parse(JSON.stringify(template.relSchema)),
     conceptSchema: JSON.parse(JSON.stringify(template.conceptSchema)),
-    assets: [],
-    canvasImages: [],
+    assets: JSON.parse(JSON.stringify(template.assets ?? [])),
+    canvasImages: JSON.parse(JSON.stringify(template.canvasImages ?? [])),
   }
   return {
     ...store,

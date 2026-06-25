@@ -61,7 +61,9 @@ function ReadOnlyGraph({ data, onBack }: { data: ProjectData; onBack?: () => voi
     const raw = data.graph as { nodes: any[]; edges: any[]; rootNodeId?: string }
     if (!raw.nodes || raw.nodes.length === 0) return { nodes: [], edges: [] }
     const rootId = raw.rootNodeId
-    const ns: GraphNode[] = raw.nodes.map((n: any, i: number) => ({
+    // Only render entity (circle) nodes — asset and canvas-image nodes are not supported in read-only view
+    const circleNodes = raw.nodes.filter((n: any) => n.type === 'circle' || (!n.type && n.data?.label))
+    const ns: GraphNode[] = circleNodes.map((n: any, i: number) => ({
       ...n,
       type: 'circle',
       position: n.position ?? { x: 100 + (i % 5) * 200, y: 100 + Math.floor(i / 5) * 200 },
@@ -77,18 +79,21 @@ function ReadOnlyGraph({ data, onBack }: { data: ProjectData; onBack?: () => voi
         isRoot: n.id === rootId || undefined,
       } satisfies NodeData,
     }))
-    const es: Edge[] = raw.edges.map((e: any) => ({
-      ...e,
-      type: 'relationship',
-      data: {
-        labelT: e.data?.labelT ?? 0.5,
-        color: e.data?.color,
-        schemaColor: e.data?.schemaColor,
-        relationshipTypeId: e.data?.relationshipTypeId,
-        description: e.data?.description,
-        whyItMatters: e.data?.whyItMatters,
-      },
-    }))
+    // Only render relationship edges — tether edges are derived and not shown in read-only view
+    const es: Edge[] = raw.edges
+      .filter((e: any) => e.type !== 'tether')
+      .map((e: any) => ({
+        ...e,
+        type: 'relationship',
+        data: {
+          labelT: e.data?.labelT ?? 0.5,
+          color: e.data?.color,
+          schemaColor: e.data?.schemaColor,
+          relationshipTypeId: e.data?.relationshipTypeId,
+          description: e.data?.description,
+          whyItMatters: e.data?.whyItMatters,
+        },
+      }))
     return { nodes: ns, edges: es }
   }, [data])
 

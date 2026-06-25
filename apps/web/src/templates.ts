@@ -4,6 +4,7 @@ import { DEFAULT_CONCEPT_SCHEMAS } from './conceptSchema'
 import type { SchemaType } from './schema'
 import type { RelationshipType } from './relationshipSchema'
 import type { ConceptSchemaType } from './conceptSchema'
+import type { AssetData, CanvasImage } from './types'
 import type { ProjectGraph } from './projectStore'
 
 export type ProjectTemplate = {
@@ -14,6 +15,8 @@ export type ProjectTemplate = {
   relSchema: RelationshipType[]
   conceptSchema: ConceptSchemaType[]
   graph: ProjectGraph
+  assets?: AssetData[]
+  canvasImages?: CanvasImage[]
 }
 
 // ── Blank World ─────────────────────────────────────────────────────────
@@ -163,19 +166,16 @@ const storyWriting: ProjectTemplate = {
         id: 'story-e1', source: 'story-hero', target: 'story-villain', label: 'Opposes',
         type: 'relationship',
         data: { labelT: 0.5, relationshipTypeId: 'rel-opposes', schemaColor: '#ef4444' },
-        style: { stroke: '#ef4444', strokeWidth: 2 },
       },
       {
         id: 'story-e2', source: 'story-hero', target: 'story-kingdom', label: 'Located In',
         type: 'relationship',
         data: { labelT: 0.5, relationshipTypeId: 'rel-located-in', schemaColor: '#64748b' },
-        style: { stroke: '#64748b', strokeWidth: 2 },
       },
       {
         id: 'story-e3', source: 'story-villain', target: 'story-dark-faction', label: 'Leads',
         type: 'relationship',
         data: { labelT: 0.5, relationshipTypeId: 'rel-leads', schemaColor: '#8b5cf6' },
-        style: { stroke: '#8b5cf6', strokeWidth: 2 },
       },
     ],
   },
@@ -428,55 +428,46 @@ const dndCampaign: ProjectTemplate = {
         id: 'dnd-e1', source: 'dnd-session', target: 'dnd-mayor', label: 'Introduces',
         type: 'relationship',
         data: { labelT: 0.658, relationshipTypeId: 'rel-introduces', schemaColor: '#2dd4bf' },
-        style: { stroke: '#2dd4bf', strokeWidth: 2 },
       },
       {
         id: 'dnd-e2', source: 'dnd-session', target: 'dnd-quest', label: 'Advances',
         type: 'relationship',
         data: { labelT: 0.5, relationshipTypeId: 'rel-advances', schemaColor: '#38bdf8' },
-        style: { stroke: '#38bdf8', strokeWidth: 2 },
       },
       {
         id: 'dnd-e3', source: 'dnd-mayor', target: 'dnd-quest', label: 'Quest Giver',
         type: 'relationship',
         data: { labelT: 0.5, relationshipTypeId: 'rel-quest-giver', schemaColor: '#eab308' },
-        style: { stroke: '#eab308', strokeWidth: 2 },
       },
       {
         id: 'dnd-e4', source: 'dnd-mayor', target: 'dnd-oakvale', label: 'Located In',
         type: 'relationship',
         data: { labelT: 0.5, relationshipTypeId: 'rel-located-in', schemaColor: '#64748b' },
-        style: { stroke: '#64748b', strokeWidth: 2 },
       },
       {
         id: 'dnd-e5', source: 'dnd-ambush', target: 'dnd-goblin-scout', label: 'Contains',
         type: 'relationship',
         data: { labelT: 0.5, relationshipTypeId: 'rel-contains', schemaColor: '#78716c' },
-        style: { stroke: '#78716c', strokeWidth: 2 },
       },
       {
         id: 'dnd-e6', source: 'dnd-ambush', target: 'dnd-forest-road', label: 'Located In',
         type: 'relationship',
         data: { labelT: 0.292, relationshipTypeId: 'rel-located-in', schemaColor: '#64748b' },
-        style: { stroke: '#64748b', strokeWidth: 2 },
       },
       {
         id: 'dnd-e7', source: 'dnd-goblin-chief', target: 'dnd-cave', label: 'Rules',
         type: 'relationship',
         data: { labelT: 0.5, relationshipTypeId: 'rel-rules', schemaColor: '#8b5cf6' },
-        style: { stroke: '#8b5cf6', strokeWidth: 2 },
       },
       {
         id: 'dnd-e8', source: 'dnd-quest', target: 'dnd-cave', label: 'Located In',
         type: 'relationship',
         data: { labelT: 0.662, relationshipTypeId: 'rel-located-in', schemaColor: '#64748b' },
-        style: { stroke: '#64748b', strokeWidth: 2 },
       },
       {
         id: 'dnd-e9', source: 'dnd-goblin-chief', target: 'dnd-goblin-scout', label: 'Rules',
         type: 'relationship',
         data: { labelT: 0.5, relationshipTypeId: 'rel-rules', schemaColor: '#8b5cf6' },
-        style: { stroke: '#8b5cf6', strokeWidth: 2 },
       },
     ],
   },
@@ -673,25 +664,21 @@ const rpgWorld: ProjectTemplate = {
         id: 'rpg-e1', source: 'rpg-slime', target: 'rpg-potion', label: 'Drops',
         type: 'relationship',
         data: { labelT: 0.5, relationshipTypeId: 'rel-drops', schemaColor: '#eab308' },
-        style: { stroke: '#eab308', strokeWidth: 2 },
       },
       {
         id: 'rpg-e2', source: 'rpg-potion', target: 'rpg-quest', label: 'Requires',
         type: 'relationship',
         data: { labelT: 0.5, relationshipTypeId: 'rel-requires', schemaColor: '#f97316' },
-        style: { stroke: '#f97316', strokeWidth: 2 },
       },
       {
         id: 'rpg-e3', source: 'rpg-quest', target: 'rpg-dungeon', label: 'Unlocks',
         type: 'relationship',
         data: { labelT: 0.5, relationshipTypeId: 'rel-unlocks', schemaColor: '#22c55e' },
-        style: { stroke: '#22c55e', strokeWidth: 2 },
       },
       {
         id: 'rpg-e4', source: 'rpg-dungeon', target: 'rpg-boss', label: 'Contains',
         type: 'relationship',
         data: { labelT: 0.5, relationshipTypeId: 'rel-contains', schemaColor: '#64748b' },
-        style: { stroke: '#64748b', strokeWidth: 2 },
       },
     ],
   },
