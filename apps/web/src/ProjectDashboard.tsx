@@ -27,6 +27,7 @@ export function ProjectDashboard({ onOpenProject }: Props) {
   const [menuOpen, setMenuOpen] = useState<string | null>(null)
   const [showTemplates, setShowTemplates] = useState(false)
   const [busy, setBusy] = useState(false)
+  const [importError, setImportError] = useState<string | null>(null)
   const renameInputRef = useRef<HTMLInputElement>(null)
 
   const projects = cloud.projects
@@ -133,12 +134,15 @@ export function ProjectDashboard({ onOpenProject }: Props) {
   const handleImportAction = async (action: ImportAction) => {
     if (action.kind === 'new') {
       setBusy(true)
+      setImportError(null)
       try {
         const result = await api.importProjectToCloud(action.data)
         await cloud.refresh()
         setShowImport(false)
         onOpenProject(result.projectId)
       } catch (err) {
+        const msg = err instanceof Error ? err.message : 'Import failed. Please try again.'
+        setImportError(msg)
         console.error('Import failed:', err)
       } finally {
         setBusy(false)
@@ -314,7 +318,8 @@ export function ProjectDashboard({ onOpenProject }: Props) {
         <ImportModal
           currentProject={makeDefaultProject()}
           onConfirm={handleImportAction}
-          onCancel={() => setShowImport(false)}
+          onCancel={() => { setShowImport(false); setImportError(null) }}
+          importError={importError}
         />
       )}
 

@@ -1,29 +1,118 @@
 import type { SchemaType } from './schema'
 import type { RelationshipType } from './relationshipSchema'
 import type { ConceptSchemaType } from './conceptSchema'
+import type { AssetData, AssetEntry, CanvasImage, SizeLevel } from './types'
 import type { ProjectGraph, ProjectData, ProjectStore } from './projectStore'
 import { getActiveProject, saveProjectStore } from './projectStore'
 import { uid } from './schema'
 
-// ── Export format ───────────────────────────────────────────────────────
+// ═══════════════════════════════════════════════════════════════════════════
+// v2 Format — World / Pages separation
+// World owns objects. Pages own layouts.
+// ═══════════════════════════════════════════════════════════════════════════
 
-export type NarrasmithExport = {
+export type WorldEntity = {
+  id: string
+  label: string
+  entityType: string
+  typeId?: string
+  fields?: Record<string, unknown>
+  description?: string
+  color?: string
+  sizeLevel?: SizeLevel
+  concepts?: Record<string, unknown[]>
+  profileImageUrl?: string
+  labelColor?: string
+  rootGlowColor?: string
+}
+
+export type WorldAsset = {
+  id: string
+  title: string
+  linkedEntityIds: string[]
+  entries: AssetEntry[]
+}
+
+export type WorldRelationship = {
+  id: string
+  source: string
+  target: string
+  sourceHandle?: string
+  targetHandle?: string
+  label?: string
+  relationshipTypeId?: string
+  description?: string
+  whyItMatters?: string
+  color?: string
+  schemaColor?: string
+  labelT?: number
+}
+
+export type NarrasmithWorld = {
+  entities: WorldEntity[]
+  assets: WorldAsset[]
+  relationships: WorldRelationship[]
+  entitySchemas: SchemaType[]
+  relationshipSchemas: RelationshipType[]
+  conceptSchemas: ConceptSchemaType[]
+}
+
+export type PageEntityLayout = {
+  entityId: string
+  x: number
+  y: number
+}
+
+export type PageAssetLayout = {
+  assetId: string
+  x: number
+  y: number
+}
+
+export type NarrasmithPage = {
+  id: string
+  name: string
+  viewport?: unknown
+  rootEntityId?: string
+  entityLayouts: PageEntityLayout[]
+  assetLayouts: PageAssetLayout[]
+  canvasImages: CanvasImage[]
+}
+
+export type NarrasmithExportV2 = {
   format: 'narrasmith-project'
-  version: 1
+  version: 2
   exportedAt: string
-
   project: {
     id: string
     name: string
     createdAt: string
     updatedAt?: string
   }
+  world: NarrasmithWorld
+  pages: NarrasmithPage[]
+}
 
+// ═══════════════════════════════════════════════════════════════════════════
+// v1 Format — kept for backward-compatible import only
+// ═══════════════════════════════════════════════════════════════════════════
+
+export type NarrasmithExport = {
+  format: 'narrasmith-project'
+  version: 1
+  exportedAt: string
+  project: {
+    id: string
+    name: string
+    createdAt: string
+    updatedAt?: string
+  }
   entitySchema: SchemaType[]
   relationshipSchema: RelationshipType[]
   conceptSchema: ConceptSchemaType[]
-
   graph: ProjectGraph
+  assets?: AssetData[]
+  canvasImages?: CanvasImage[]
 }
 
 // ── Fragment format ─────────────────────────────────────────────────────
@@ -32,57 +121,212 @@ export type NarrasmithFragment = {
   format: 'narrasmith-fragment'
   version: 1
   name?: string
-
   entitySchema?: SchemaType[]
   relationshipSchema?: RelationshipType[]
   conceptSchema?: ConceptSchemaType[]
-
+  assets?: AssetData[]
+  canvasImages?: CanvasImage[]
   nodes: Record<string, unknown>[]
   edges: Record<string, unknown>[]
 }
 
-// ── Unified mergeable content ───────────────────────────────────────────
+// ── Unified mergeable content (internal) ───────────────────────────────
 
 export type MergeableContent = {
   entitySchema: SchemaType[]
   relationshipSchema: RelationshipType[]
   conceptSchema: ConceptSchemaType[]
   graph: ProjectGraph
+  assets: AssetData[]
+  canvasImages: CanvasImage[]
 }
 
-function toMergeable(data: NarrasmithExport | NarrasmithFragment): MergeableContent {
-  if (data.format === 'narrasmith-fragment') {
+// ═══════════════════════════════════════════════════════════════════════════
+// Internal: reconstruct internal graph from v2 world + page
+// ═══════════════════════════════════════════════════════════════════════════
+
+function buildGraphFromV2(data: NarrasmithExportV2): {
+  graph: ProjectGraph
+  assets: AssetData[]
+  canvasImages: CanvasImage[]
+} {
+  const page: NarrasmithPage = data.pages?.[0] ?? {
+    id: 'overview', name: 'Overview',
+    entityLayouts: [], assetLayouts: [], canvasImages: [],
+  }
+
+  const layoutMap = new Map(page.entityLayouts.map(l => [l.entityId, { x: l.x, y: l.y }]))
+  const assetLayoutMap = new Map(page.assetLayouts.map(l => [l.assetId, { x: l.x, y: l.y }]))
+
+  // Entity circle nodes — positions come from page layout
+  const entityNodes = data.world.entities.map((e, i) => {
+    const pos = layoutMap.get(e.id) ?? { x: 100 + (i % 5) * 200, y: 100 + Math.floor(i / 5) * 200 }
     return {
-      entitySchema: data.entitySchema ?? [],
-      relationshipSchema: data.relationshipSchema ?? [],
-      conceptSchema: data.conceptSchema ?? [],
-      graph: { nodes: data.nodes, edges: data.edges },
+      id: e.id,
+      type: 'circle',
+      position: pos,
+      data: {
+        label: e.label,
+        entityType: e.entityType,
+        typeId: e.typeId,
+        fields: e.fields ?? {},
+        description: e.description ?? '',
+        color: e.color,
+        sizeLevel: e.sizeLevel ?? 3,
+        concepts: e.concepts,
+        profileImageUrl: e.profileImageUrl,
+        labelColor: e.labelColor,
+        rootGlowColor: e.rootGlowColor,
+        isRoot: e.id === page.rootEntityId || undefined,
+      },
+    }
+  })
+
+  // AssetData records — pin state and position come from page asset layouts
+  const assets: AssetData[] = data.world.assets.map(a => {
+    const pos = assetLayoutMap.get(a.id)
+    return {
+      id: a.id,
+      title: a.title,
+      linkedEntityIds: a.linkedEntityIds,
+      entries: a.entries,
+      isPinnedOnCanvas: !!pos,
+      ...(pos && { position: pos }),
+    }
+  })
+
+  const entityNodeIds = new Set(entityNodes.map(n => n.id))
+
+  // Asset canvas nodes — only for assets that have a page layout entry
+  const assetCanvasNodes = assets
+    .filter(a => a.isPinnedOnCanvas && a.position)
+    .map(a => {
+      const entries = a.entries ?? []
+      const summary = entries.slice(0, 3).map(e => e.label || e.type).join(', ')
+      return {
+        id: `asset-node-${a.id}`,
+        type: 'asset',
+        position: a.position!,
+        data: { assetId: a.id, title: a.title, entryCount: entries.length, entrySummary: summary },
+      }
+    })
+
+  // Tether edges derived from linkedEntityIds — never stored, always derived
+  const tetherEdges = assets
+    .filter(a => a.isPinnedOnCanvas)
+    .flatMap(a =>
+      a.linkedEntityIds
+        .filter(eid => entityNodeIds.has(eid))
+        .map(eid => ({
+          id: `tether-${a.id}-${eid}`,
+          source: `asset-node-${a.id}`,
+          target: eid,
+          type: 'tether',
+        }))
+    )
+
+  // Relationship edges from world relationships
+  const relEdges = data.world.relationships.map(r => ({
+    id: r.id,
+    source: r.source,
+    target: r.target,
+    ...(r.sourceHandle != null && { sourceHandle: r.sourceHandle }),
+    ...(r.targetHandle != null && { targetHandle: r.targetHandle }),
+    ...(r.label != null && { label: r.label }),
+    type: 'relationship',
+    data: {
+      labelT: r.labelT ?? 0.5,
+      color: r.color,
+      schemaColor: r.schemaColor,
+      relationshipTypeId: r.relationshipTypeId,
+      description: r.description,
+      whyItMatters: r.whyItMatters,
+    },
+  }))
+
+  // Canvas images from page — nodes are synthesized for normalizeGraph
+  const canvasImages = page.canvasImages ?? []
+  const canvasImageNodes = canvasImages.map(ci => ({
+    id: `canvas-img-${ci.id}`,
+    type: 'canvas-image',
+    position: { x: ci.x, y: ci.y },
+    draggable: !ci.locked,
+    selectable: true,
+    data: {
+      canvasImageId: ci.id,
+      title: ci.title,
+      imageUrl: ci.imageUrl,
+      width: ci.width,
+      height: ci.height,
+      rotation: ci.rotation ?? 0,
+      opacity: ci.opacity ?? 1,
+      locked: ci.locked ?? false,
+    },
+  }))
+
+  return {
+    graph: {
+      nodes: [...canvasImageNodes, ...entityNodes, ...assetCanvasNodes] as any,
+      edges: [...relEdges, ...tetherEdges] as any,
+      rootNodeId: page.rootEntityId,
+    },
+    assets,
+    canvasImages,
+  }
+}
+
+function toMergeable(data: NarrasmithExportV2 | NarrasmithExport | NarrasmithFragment): MergeableContent {
+  if (data.format === 'narrasmith-fragment') {
+    const d = data as NarrasmithFragment
+    return {
+      entitySchema: d.entitySchema ?? [],
+      relationshipSchema: d.relationshipSchema ?? [],
+      conceptSchema: d.conceptSchema ?? [],
+      graph: { nodes: d.nodes, edges: d.edges },
+      assets: d.assets ?? [],
+      canvasImages: d.canvasImages ?? [],
     }
   }
+  if ((data as any).version === 2) {
+    const d = data as NarrasmithExportV2
+    const built = buildGraphFromV2(d)
+    return {
+      entitySchema: d.world.entitySchemas,
+      relationshipSchema: d.world.relationshipSchemas,
+      conceptSchema: d.world.conceptSchemas,
+      ...built,
+    }
+  }
+  // v1
+  const d = data as NarrasmithExport
   return {
-    entitySchema: data.entitySchema,
-    relationshipSchema: data.relationshipSchema,
-    conceptSchema: data.conceptSchema,
-    graph: data.graph,
+    entitySchema: d.entitySchema,
+    relationshipSchema: d.relationshipSchema,
+    conceptSchema: d.conceptSchema,
+    graph: d.graph,
+    assets: d.assets ?? [],
+    canvasImages: d.canvasImages ?? [],
   }
 }
 
-// ── Import preview summary ──────────────────────────────────────────────
+// ═══════════════════════════════════════════════════════════════════════════
+// Preview / merge summary types
+// ═══════════════════════════════════════════════════════════════════════════
 
 export type ImportPreview = {
   projectName: string
   nodeCount: number
+  assetCount: number
   edgeCount: number
   entitySchemaCount: number
   relationshipSchemaCount: number
   conceptSchemaCount: number
 }
 
-// ── Merge types ─────────────────────────────────────────────────────────
-
 export type MergePreview = {
   nodesToAdd: number
   edgesToAdd: number
+  assetsToAdd: number
   entitySchemasToAdd: number
   entitySchemasToSkip: number
   relSchemasToAdd: number
@@ -94,6 +338,7 @@ export type MergePreview = {
 export type MergeReport = {
   nodesAdded: number
   edgesAdded: number
+  assetsAdded: number
   entitySchemasAdded: number
   entitySchemasSkipped: number
   relSchemasAdded: number
@@ -102,13 +347,72 @@ export type MergeReport = {
   conceptSchemasSkipped: number
 }
 
-// ── Export ───────────────────────────────────────────────────────────────
+// ═══════════════════════════════════════════════════════════════════════════
+// Export (always v2)
+// ═══════════════════════════════════════════════════════════════════════════
 
 export function buildExportPayload(store: ProjectStore, projectId?: string): { json: string; fileName: string } {
   const project = projectId ? store.projects[projectId] ?? getActiveProject(store) : getActiveProject(store)
-  const payload: NarrasmithExport = {
+  const allNodes = project.graph.nodes as any[]
+  const allEdges = project.graph.edges as any[]
+
+  // World entities: circle nodes only.
+  // Asset and canvas-image nodes are derived — they live in pages, not world.
+  const circleNodes = allNodes.filter(n => n.type === 'circle')
+  const entities: WorldEntity[] = circleNodes.map(n => ({
+    id: n.id,
+    label: n.data?.label ?? 'Untitled',
+    entityType: n.data?.entityType ?? 'Character',
+    ...(n.data?.typeId != null         && { typeId: n.data.typeId }),
+    ...(n.data?.fields != null         && { fields: n.data.fields }),
+    ...(n.data?.description != null    && { description: n.data.description }),
+    ...(n.data?.color != null          && { color: n.data.color }),
+    ...(n.data?.sizeLevel != null      && { sizeLevel: n.data.sizeLevel }),
+    ...(n.data?.concepts != null       && { concepts: n.data.concepts }),
+    ...(n.data?.profileImageUrl != null && { profileImageUrl: n.data.profileImageUrl }),
+    ...(n.data?.labelColor != null     && { labelColor: n.data.labelColor }),
+    ...(n.data?.rootGlowColor != null  && { rootGlowColor: n.data.rootGlowColor }),
+  }))
+
+  const entityLayouts: PageEntityLayout[] = circleNodes
+    .filter(n => n.position)
+    .map(n => ({ entityId: n.id, x: n.position.x, y: n.position.y }))
+
+  // World assets: strip position and pin state — those belong to page layouts
+  const worldAssets: WorldAsset[] = (project.assets ?? []).map(a => ({
+    id: a.id,
+    title: a.title,
+    linkedEntityIds: a.linkedEntityIds,
+    entries: a.entries,
+  }))
+
+  const assetLayouts: PageAssetLayout[] = (project.assets ?? [])
+    .filter(a => a.isPinnedOnCanvas && a.position)
+    .map(a => ({ assetId: a.id, x: a.position!.x, y: a.position!.y }))
+
+  // World relationships: relationship edges only — tether edges are derived
+  const relationships: WorldRelationship[] = allEdges
+    .filter(e => e.type === 'relationship')
+    .map(e => ({
+      id: e.id,
+      source: e.source,
+      target: e.target,
+      ...(e.sourceHandle != null            && { sourceHandle: e.sourceHandle }),
+      ...(e.targetHandle != null            && { targetHandle: e.targetHandle }),
+      ...(e.label != null                   && { label: e.label }),
+      ...(e.data?.relationshipTypeId != null && { relationshipTypeId: e.data.relationshipTypeId }),
+      ...(e.data?.description != null       && { description: e.data.description }),
+      ...(e.data?.whyItMatters != null      && { whyItMatters: e.data.whyItMatters }),
+      ...(e.data?.color != null             && { color: e.data.color }),
+      ...(e.data?.schemaColor != null       && { schemaColor: e.data.schemaColor }),
+      ...(e.data?.labelT != null && e.data.labelT !== 0.5 && { labelT: e.data.labelT }),
+    }))
+
+  const rootEntityId: string | undefined = (project.graph as any).rootNodeId ?? undefined
+
+  const payload: NarrasmithExportV2 = {
     format: 'narrasmith-project',
-    version: 1,
+    version: 2,
     exportedAt: new Date().toISOString(),
     project: {
       id: project.id,
@@ -116,10 +420,22 @@ export function buildExportPayload(store: ProjectStore, projectId?: string): { j
       createdAt: project.createdAt,
       updatedAt: project.updatedAt,
     },
-    entitySchema: project.entitySchema,
-    relationshipSchema: project.relSchema,
-    conceptSchema: project.conceptSchema,
-    graph: project.graph,
+    world: {
+      entities,
+      assets: worldAssets,
+      relationships,
+      entitySchemas: project.entitySchema,
+      relationshipSchemas: project.relSchema,
+      conceptSchemas: project.conceptSchema,
+    },
+    pages: [{
+      id: 'overview',
+      name: 'Overview',
+      ...(rootEntityId && { rootEntityId }),
+      entityLayouts,
+      assetLayouts,
+      canvasImages: project.canvasImages ?? [],
+    }],
   }
 
   const slug = project.name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '')
@@ -141,14 +457,16 @@ export function downloadExportJson(json: string, fileName: string): void {
   URL.revokeObjectURL(url)
 }
 
-// ── Validation ──────────────────────────────────────────────────────────
+// ═══════════════════════════════════════════════════════════════════════════
+// Validation
+// ═══════════════════════════════════════════════════════════════════════════
 
 export type ValidationResult =
-  | { ok: true; data: NarrasmithExport }
+  | { ok: true; data: NarrasmithExportV2 | NarrasmithExport }
   | { ok: false; error: string }
 
 export type ContentValidationResult =
-  | { ok: true; kind: 'project'; data: NarrasmithExport }
+  | { ok: true; kind: 'project'; data: NarrasmithExportV2 | NarrasmithExport }
   | { ok: true; kind: 'fragment'; data: NarrasmithFragment }
   | { ok: false; error: string }
 
@@ -173,47 +491,40 @@ export function validateImportContent(raw: string): ContentValidationResult {
 
   const obj = parsed as Record<string, unknown>
 
-  if (obj.format === 'narrasmith-fragment') {
-    return validateFragment(obj, parsed)
-  }
+  if (obj.format === 'narrasmith-fragment') return validateFragment(obj, parsed)
 
   if (obj.format === 'narrasmith-project') {
-    return validateProject(obj, parsed)
+    if (obj.version === 2) return validateProjectV2(obj, parsed)
+    if (obj.version === 1) return validateProjectV1(obj, parsed)
+    return { ok: false, error: `Unsupported project version: ${obj.version}. This app supports versions 1 and 2.` }
   }
 
   return { ok: false, error: 'Not a Narrasmith file (missing format header). Expected "narrasmith-project" or "narrasmith-fragment".' }
 }
 
-function validateProject(obj: Record<string, unknown>, parsed: unknown): ContentValidationResult {
-  if (obj.version !== 1) {
-    return { ok: false, error: `Unsupported version: ${obj.version}. This app supports version 1.` }
-  }
+function validateProjectV2(obj: Record<string, unknown>, parsed: unknown): ContentValidationResult {
+  if (!obj.world || typeof obj.world !== 'object') return { ok: false, error: 'Missing world data.' }
+  const w = obj.world as Record<string, unknown>
+  if (!Array.isArray(w.entities))            return { ok: false, error: 'Missing world.entities array.' }
+  if (!Array.isArray(w.assets))              return { ok: false, error: 'Missing world.assets array.' }
+  if (!Array.isArray(w.relationships))       return { ok: false, error: 'Missing world.relationships array.' }
+  if (!Array.isArray(w.entitySchemas))       return { ok: false, error: 'Missing world.entitySchemas array.' }
+  if (!Array.isArray(w.relationshipSchemas)) return { ok: false, error: 'Missing world.relationshipSchemas array.' }
+  if (!Array.isArray(w.conceptSchemas))      return { ok: false, error: 'Missing world.conceptSchemas array.' }
+  if (!Array.isArray(obj.pages))             return { ok: false, error: 'Missing pages array.' }
+  return { ok: true, kind: 'project', data: parsed as NarrasmithExportV2 }
+}
 
-  if (!obj.project || typeof obj.project !== 'object') {
-    return { ok: false, error: 'Missing project metadata.' }
-  }
-
-  if (!obj.graph || typeof obj.graph !== 'object') {
-    return { ok: false, error: 'Missing graph data.' }
-  }
-
+function validateProjectV1(obj: Record<string, unknown>, parsed: unknown): ContentValidationResult {
+  if (!obj.project || typeof obj.project !== 'object') return { ok: false, error: 'Missing project metadata.' }
+  if (!obj.graph || typeof obj.graph !== 'object')     return { ok: false, error: 'Missing graph data.' }
   const graph = obj.graph as Record<string, unknown>
   if (!Array.isArray(graph.nodes) || !Array.isArray(graph.edges)) {
     return { ok: false, error: 'Graph must contain nodes and edges arrays.' }
   }
-
-  if (!Array.isArray(obj.entitySchema)) {
-    return { ok: false, error: 'Missing entitySchema array.' }
-  }
-
-  if (!Array.isArray(obj.relationshipSchema)) {
-    return { ok: false, error: 'Missing relationshipSchema array.' }
-  }
-
-  if (!Array.isArray(obj.conceptSchema)) {
-    return { ok: false, error: 'Missing conceptSchema array.' }
-  }
-
+  if (!Array.isArray(obj.entitySchema))       return { ok: false, error: 'Missing entitySchema array.' }
+  if (!Array.isArray(obj.relationshipSchema)) return { ok: false, error: 'Missing relationshipSchema array.' }
+  if (!Array.isArray(obj.conceptSchema))      return { ok: false, error: 'Missing conceptSchema array.' }
   return { ok: true, kind: 'project', data: parsed as NarrasmithExport }
 }
 
@@ -221,91 +532,147 @@ function validateFragment(obj: Record<string, unknown>, parsed: unknown): Conten
   if (obj.version !== 1) {
     return { ok: false, error: `Unsupported fragment version: ${obj.version}. This app supports version 1.` }
   }
-
-  if (!Array.isArray(obj.nodes)) {
-    return { ok: false, error: 'Fragment must contain a nodes array.' }
-  }
-
-  if (!Array.isArray(obj.edges)) {
-    return { ok: false, error: 'Fragment must contain an edges array.' }
-  }
-
+  if (!Array.isArray(obj.nodes)) return { ok: false, error: 'Fragment must contain a nodes array.' }
+  if (!Array.isArray(obj.edges)) return { ok: false, error: 'Fragment must contain an edges array.' }
   if (obj.entitySchema !== undefined && !Array.isArray(obj.entitySchema)) {
     return { ok: false, error: 'entitySchema must be an array if present.' }
   }
-
   if (obj.relationshipSchema !== undefined && !Array.isArray(obj.relationshipSchema)) {
     return { ok: false, error: 'relationshipSchema must be an array if present.' }
   }
-
   if (obj.conceptSchema !== undefined && !Array.isArray(obj.conceptSchema)) {
     return { ok: false, error: 'conceptSchema must be an array if present.' }
   }
-
   return { ok: true, kind: 'fragment', data: parsed as NarrasmithFragment }
 }
 
-// ── Preview ─────────────────────────────────────────────────────────────
+// ═══════════════════════════════════════════════════════════════════════════
+// Preview
+// ═══════════════════════════════════════════════════════════════════════════
 
-export function buildImportPreview(data: NarrasmithExport): ImportPreview {
+export function buildContentPreview(data: NarrasmithExportV2 | NarrasmithExport | NarrasmithFragment): ImportPreview {
+  if (data.format === 'narrasmith-fragment') {
+    const d = data as NarrasmithFragment
+    return {
+      projectName: d.name ?? 'Fragment',
+      nodeCount: d.nodes?.length ?? 0,
+      assetCount: d.assets?.length ?? 0,
+      edgeCount: d.edges?.length ?? 0,
+      entitySchemaCount: d.entitySchema?.length ?? 0,
+      relationshipSchemaCount: d.relationshipSchema?.length ?? 0,
+      conceptSchemaCount: d.conceptSchema?.length ?? 0,
+    }
+  }
+  if ((data as any).version === 2) {
+    const d = data as NarrasmithExportV2
+    return {
+      projectName: d.project?.name ?? 'Untitled',
+      nodeCount: d.world.entities.length,
+      assetCount: d.world.assets.length,
+      edgeCount: d.world.relationships.length,
+      entitySchemaCount: d.world.entitySchemas.length,
+      relationshipSchemaCount: d.world.relationshipSchemas.length,
+      conceptSchemaCount: d.world.conceptSchemas.length,
+    }
+  }
+  // v1
+  const d = data as NarrasmithExport
+  const circleNodes = (d.graph?.nodes as any[] ?? []).filter((n: any) => n.type === 'circle')
+  const relEdges = (d.graph?.edges as any[] ?? []).filter((e: any) => e.type === 'relationship')
   return {
-    projectName: (data.project as Record<string, unknown>)?.name as string ?? 'Untitled',
-    nodeCount: data.graph.nodes.length,
-    edgeCount: data.graph.edges.length,
-    entitySchemaCount: data.entitySchema.length,
-    relationshipSchemaCount: data.relationshipSchema.length,
-    conceptSchemaCount: data.conceptSchema.length,
+    projectName: (d.project as any)?.name ?? 'Untitled',
+    nodeCount: circleNodes.length,
+    assetCount: d.assets?.length ?? 0,
+    edgeCount: relEdges.length,
+    entitySchemaCount: d.entitySchema?.length ?? 0,
+    relationshipSchemaCount: d.relationshipSchema?.length ?? 0,
+    conceptSchemaCount: d.conceptSchema?.length ?? 0,
   }
 }
 
-export function buildContentPreview(data: NarrasmithExport | NarrasmithFragment): ImportPreview {
-  const m = toMergeable(data)
-  const name = data.format === 'narrasmith-project'
-    ? ((data as NarrasmithExport).project as Record<string, unknown>)?.name as string ?? 'Untitled'
-    : (data as NarrasmithFragment).name ?? 'Fragment'
-  return {
-    projectName: name,
-    nodeCount: m.graph.nodes.length,
-    edgeCount: m.graph.edges.length,
-    entitySchemaCount: m.entitySchema.length,
-    relationshipSchemaCount: m.relationshipSchema.length,
-    conceptSchemaCount: m.conceptSchema.length,
-  }
+// ═══════════════════════════════════════════════════════════════════════════
+// Import as new project
+// ═══════════════════════════════════════════════════════════════════════════
+
+export function importProject(data: NarrasmithExportV2 | NarrasmithExport, store: ProjectStore): ProjectStore {
+  if ((data as any).version === 2) return importProjectV2(data as NarrasmithExportV2, store)
+  return importProjectV1(data as NarrasmithExport, store)
 }
 
-// ── Import as new project ────────────────────────────────────────────────
-
-export function importProject(data: NarrasmithExport, store: ProjectStore): ProjectStore {
+function importProjectV2(data: NarrasmithExportV2, store: ProjectStore): ProjectStore {
   const newId = `project-${uid()}`
   const now = new Date().toISOString()
+  const { graph, assets, canvasImages } = buildGraphFromV2(data)
 
   const project: ProjectData = {
     id: newId,
-    name: (data.project as Record<string, unknown>)?.name as string ?? 'Imported Project',
-    createdAt: (data.project as Record<string, unknown>)?.createdAt as string ?? now,
+    name: data.project?.name ?? 'Imported Project',
+    createdAt: data.project?.createdAt ?? now,
     updatedAt: now,
-    graph: data.graph,
-    entitySchema: data.entitySchema,
-    relSchema: data.relationshipSchema,
-    conceptSchema: data.conceptSchema,
-    assets: (data as any).assets ?? [],
-    canvasImages: (data as any).canvasImages ?? [],
+    graph,
+    entitySchema: data.world.entitySchemas,
+    relSchema: data.world.relationshipSchemas,
+    conceptSchema: data.world.conceptSchemas,
+    assets,
+    canvasImages,
   }
 
   const next: ProjectStore = {
     ...store,
     activeProjectId: newId,
-    projects: {
-      ...store.projects,
-      [newId]: project,
-    },
+    projects: { ...store.projects, [newId]: project },
   }
-
   saveProjectStore(next)
   return next
 }
 
-// ── Merge into existing project ─────────────────────────────────────────
+function importProjectV1(data: NarrasmithExport, store: ProjectStore): ProjectStore {
+  const newId = `project-${uid()}`
+  const now = new Date().toISOString()
+
+  // If assets array absent or empty but graph has asset nodes, reconstruct minimal AssetData.
+  // This handles very old v1 exports that predate the assets field.
+  let assets: AssetData[] = data.assets ?? []
+  if (assets.length === 0) {
+    const assetNodes = (data.graph?.nodes as any[] ?? []).filter((n: any) => n.type === 'asset')
+    if (assetNodes.length > 0) {
+      console.warn(`[Narrasmith] v1 import: reconstructing ${assetNodes.length} asset(s) from graph nodes — entries will be empty.`)
+      assets = assetNodes.map((n: any) => ({
+        id: n.data?.assetId ?? n.id.replace('asset-node-', ''),
+        title: n.data?.title ?? 'Untitled Asset',
+        linkedEntityIds: [],
+        isPinnedOnCanvas: true,
+        position: n.position,
+        entries: [],
+      }))
+    }
+  }
+
+  const project: ProjectData = {
+    id: newId,
+    name: (data.project as any)?.name ?? 'Imported Project',
+    createdAt: (data.project as any)?.createdAt ?? now,
+    updatedAt: now,
+    graph: data.graph,
+    entitySchema: data.entitySchema,
+    relSchema: data.relationshipSchema,
+    conceptSchema: data.conceptSchema,
+    assets,
+    canvasImages: data.canvasImages ?? [],
+  }
+
+  const next: ProjectStore = {
+    ...store,
+    activeProjectId: newId,
+    projects: { ...store.projects, [newId]: project },
+  }
+  saveProjectStore(next)
+  return next
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Merge into existing project
+// ═══════════════════════════════════════════════════════════════════════════
 
 function deduplicateByName<T extends { name: string }>(
   existing: T[],
@@ -346,8 +713,7 @@ function remapNodes(
   return nodes.map(node => {
     const oldId = (node as { id?: string }).id ?? ''
     const newId = remap.get(oldId)
-    if (!newId) return node
-    return { ...node, id: newId }
+    return newId ? { ...node, id: newId } : node
   })
 }
 
@@ -367,13 +733,14 @@ function remapEdges(
 }
 
 export function buildMergePreview(
-  data: NarrasmithExport | NarrasmithFragment,
+  data: NarrasmithExportV2 | NarrasmithExport | NarrasmithFragment,
   currentProject: ProjectData,
 ): MergePreview {
   const m = toMergeable(data)
-  const existingEntityNames = new Set(currentProject.entitySchema.map(s => s.name.toLowerCase()))
-  const existingRelNames = new Set(currentProject.relSchema.map(s => s.name.toLowerCase()))
+  const existingEntityNames  = new Set(currentProject.entitySchema.map(s => s.name.toLowerCase()))
+  const existingRelNames     = new Set(currentProject.relSchema.map(s => s.name.toLowerCase()))
   const existingConceptNames = new Set(currentProject.conceptSchema.map(s => s.name.toLowerCase()))
+  const existingAssetIds     = new Set((currentProject.assets ?? []).map(a => a.id))
 
   let entityAdd = 0, entitySkip = 0
   for (const s of m.entitySchema) {
@@ -388,9 +755,14 @@ export function buildMergePreview(
     if (existingConceptNames.has(s.name.toLowerCase())) conceptSkip++; else conceptAdd++
   }
 
+  const incomingEntityNodes = (m.graph.nodes as any[]).filter(n => n.type === 'circle')
+  const incomingRelEdges    = (m.graph.edges as any[]).filter(e => e.type === 'relationship')
+  const assetsToAdd         = m.assets.filter(a => !existingAssetIds.has(a.id)).length
+
   return {
-    nodesToAdd: m.graph.nodes.length,
-    edgesToAdd: m.graph.edges.length,
+    nodesToAdd: incomingEntityNodes.length,
+    edgesToAdd: incomingRelEdges.length,
+    assetsToAdd,
     entitySchemasToAdd: entityAdd,
     entitySchemasToSkip: entitySkip,
     relSchemasToAdd: relAdd,
@@ -401,37 +773,108 @@ export function buildMergePreview(
 }
 
 export function mergeIntoProject(
-  data: NarrasmithExport | NarrasmithFragment,
+  data: NarrasmithExportV2 | NarrasmithExport | NarrasmithFragment,
   currentProject: ProjectData,
 ): { project: ProjectData; report: MergeReport } {
   const m = toMergeable(data)
-  const existingNodeIds = new Set(
-    currentProject.graph.nodes.map(n => (n as { id?: string }).id ?? ''),
+
+  // Only remap entity (circle) nodes — asset and canvas-image nodes are derived
+  const existingEntityIds = new Set(
+    (currentProject.graph.nodes as any[])
+      .filter(n => n.type === 'circle')
+      .map(n => (n as { id?: string }).id ?? ''),
   )
+  const incomingEntityNodes = (m.graph.nodes as any[]).filter(n => n.type === 'circle')
+  const nodeRemap           = buildNodeIdRemap(existingEntityIds, incomingEntityNodes)
+  const remappedNodes       = remapNodes(incomingEntityNodes, nodeRemap)
 
-  const nodeRemap = buildNodeIdRemap(existingNodeIds, m.graph.nodes)
-  const remappedNodes = remapNodes(m.graph.nodes, nodeRemap)
-  const remappedEdges = remapEdges(m.graph.edges, nodeRemap)
+  const incomingRelEdges = (m.graph.edges as any[]).filter(e => e.type === 'relationship')
+  const remappedEdges    = remapEdges(incomingRelEdges, nodeRemap)
 
-  const entityResult = deduplicateByName(currentProject.entitySchema, m.entitySchema)
-  const relResult = deduplicateByName(currentProject.relSchema, m.relationshipSchema)
+  const entityResult  = deduplicateByName(currentProject.entitySchema, m.entitySchema)
+  const relResult     = deduplicateByName(currentProject.relSchema, m.relationshipSchema)
   const conceptResult = deduplicateByName(currentProject.conceptSchema, m.conceptSchema)
+
+  const existingAssetIds    = new Set((currentProject.assets ?? []).map(a => a.id))
+  const assetsToAdd         = m.assets.filter(a => !existingAssetIds.has(a.id))
+
+  // Derive canvas nodes for newly-added pinned assets
+  const mergedEntityIds = new Set([
+    ...existingEntityIds,
+    ...remappedNodes.map(n => (n as any).id as string),
+  ])
+  const newAssetCanvasNodes: Record<string, unknown>[] = assetsToAdd
+    .filter(a => a.isPinnedOnCanvas && a.position)
+    .map(a => {
+      const entries = a.entries ?? []
+      const summary = entries.slice(0, 3).map(e => e.label || e.type).join(', ')
+      return {
+        id: `asset-node-${a.id}`,
+        type: 'asset',
+        position: a.position!,
+        data: { assetId: a.id, title: a.title, entryCount: entries.length, entrySummary: summary },
+      }
+    })
+  const newTetherEdges: Record<string, unknown>[] = assetsToAdd
+    .filter(a => a.isPinnedOnCanvas)
+    .flatMap(a =>
+      a.linkedEntityIds
+        .filter(eid => mergedEntityIds.has(eid))
+        .map(eid => ({
+          id: `tether-${a.id}-${eid}`,
+          source: `asset-node-${a.id}`,
+          target: eid,
+          type: 'tether',
+        }))
+    )
+
+  const existingCanvasImageIds = new Set((currentProject.canvasImages ?? []).map(c => c.id))
+  const canvasImagesToAdd      = m.canvasImages.filter(c => !existingCanvasImageIds.has(c.id))
+  const newCanvasImageNodes: Record<string, unknown>[] = canvasImagesToAdd.map(ci => ({
+    id: `canvas-img-${ci.id}`,
+    type: 'canvas-image',
+    position: { x: ci.x, y: ci.y },
+    draggable: !ci.locked,
+    selectable: true,
+    data: {
+      canvasImageId: ci.id,
+      title: ci.title,
+      imageUrl: ci.imageUrl,
+      width: ci.width,
+      height: ci.height,
+      rotation: ci.rotation ?? 0,
+      opacity: ci.opacity ?? 1,
+      locked: ci.locked ?? false,
+    },
+  }))
 
   const project: ProjectData = {
     ...currentProject,
     graph: {
       ...currentProject.graph,
-      nodes: [...currentProject.graph.nodes, ...remappedNodes],
-      edges: [...currentProject.graph.edges, ...remappedEdges],
+      nodes: [
+        ...(currentProject.graph.nodes as any[]),
+        ...remappedNodes,
+        ...newAssetCanvasNodes,
+        ...newCanvasImageNodes,
+      ],
+      edges: [
+        ...(currentProject.graph.edges as any[]),
+        ...remappedEdges,
+        ...newTetherEdges,
+      ],
     },
     entitySchema: entityResult.merged,
     relSchema: relResult.merged,
     conceptSchema: conceptResult.merged,
+    assets: [...(currentProject.assets ?? []), ...assetsToAdd],
+    canvasImages: [...(currentProject.canvasImages ?? []), ...canvasImagesToAdd],
   }
 
   const report: MergeReport = {
     nodesAdded: remappedNodes.length,
     edgesAdded: remappedEdges.length,
+    assetsAdded: assetsToAdd.length,
     entitySchemasAdded: entityResult.added,
     entitySchemasSkipped: entityResult.skipped,
     relSchemasAdded: relResult.added,

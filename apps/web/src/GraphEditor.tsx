@@ -74,7 +74,12 @@ function normalizeGraph(raw: { nodes: any[]; edges: any[]; rootNodeId?: string }
   if (!raw.nodes || raw.nodes.length === 0) return DEFAULT_GRAPH
   const rootId = raw.rootNodeId
   const nodes: GraphNode[] = raw.nodes
-    .filter((n: any) => n.type !== 'asset' && n.type !== 'canvas-image')
+    .filter((n: any) => {
+      if (n.type !== 'circle' && n.type !== 'asset' && n.type !== 'canvas-image') {
+        console.warn(`[Narrasmith] Unknown node type "${n.type}" on node "${n.id ?? '(no id)'}" — falling back to entity node.`)
+      }
+      return n.type !== 'asset' && n.type !== 'canvas-image'
+    })
     .map((n: any, i: number) => ({
       ...n,
       type: 'circle',
@@ -270,6 +275,8 @@ export function GraphEditor({ projectId, onBackToDashboard }: GraphEditorProps) 
 
   // ── Import / Export ────────────────────────────────────────────────────
   const handleExport = useCallback(() => {
+    const exportedProject = storeRef.current.projects[storeRef.current.activeProjectId]
+    console.log('[Narrasmith] Exporting assets', exportedProject?.assets)
     setExportPayload(buildExportPayload(storeRef.current))
   }, [])
 
@@ -286,6 +293,8 @@ export function GraphEditor({ projectId, onBackToDashboard }: GraphEditorProps) 
       setConceptSchema(project.conceptSchema ?? [])
       setAssets(project.assets ?? [])
       setCanvasImages(project.canvasImages ?? [])
+      setProjectName(project.name)
+      setRootNodeId((project.graph as any).rootNodeId ?? null)
       setSelectedNodeId(null)
       setSelectedEdgeId(null)
       setShowImport(false)
@@ -308,10 +317,10 @@ export function GraphEditor({ projectId, onBackToDashboard }: GraphEditorProps) 
   }, [setNodes, setEdges])
 
   // ── Persistence: localStorage + debounced cloud save ────────────────
-  // Guard: don't save until cloud data has been loaded (prevents overwriting with empty state)
+  // storeRef is updated unconditionally so export/import always read current state.
+  // Persistence (localStorage + cloud) is guarded until cloud data has been loaded
+  // to prevent overwriting cloud state with stale local data on startup.
   useEffect(() => {
-    if (!cloudLoadedRef.current) return
-
     // Sync canvas positions back to assets and canvas images before persisting
     const syncedAssets = assets.map(a => {
       if (!a.isPinnedOnCanvas) return a
@@ -343,7 +352,9 @@ export function GraphEditor({ projectId, onBackToDashboard }: GraphEditorProps) 
         },
       },
     }
-    storeRef.current = next
+    storeRef.current = next  // always current — export reads from here
+
+    if (!cloudLoadedRef.current) return  // guard only the persistence layer
     autoSave(next)
   }, [nodes, edges, schemaTypes, relTypes, conceptSchema, assets, canvasImages, rootNodeId, projectName]) // eslint-disable-line react-hooks/exhaustive-deps
 

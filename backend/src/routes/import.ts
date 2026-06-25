@@ -67,17 +67,30 @@ type ImportEdge = {
   style?: Record<string, unknown>
 }
 
+type V2EntityLayout = { entityId: string; x: number; y: number }
+
 type ImportBody = {
   format: 'narrasmith-project' | 'narrasmith-fragment'
   version: number
   name?: string
   project?: { id?: string; name?: string; createdAt?: string }
+  // v1 fields
   entitySchema?: EntitySchema[]
   relationshipSchema?: RelSchema[]
   conceptSchema?: ConceptSchema[]
   graph?: { nodes: ImportNode[]; edges: ImportEdge[]; rootNodeId?: string }
   nodes?: ImportNode[]
   edges?: ImportEdge[]
+  // v2 fields
+  world?: {
+    entities?: Array<{ id: string; label: string; entityType: string; typeId?: string; fields?: Record<string, unknown>; description?: string; color?: string; sizeLevel?: number; concepts?: Record<string, unknown[]> }>
+    relationships?: Array<{ id: string; source: string; target: string; label?: string; relationshipTypeId?: string; description?: string; whyItMatters?: string; color?: string; schemaColor?: string; labelT?: number }>
+    entitySchemas?: EntitySchema[]
+    relationshipSchemas?: RelSchema[]
+    conceptSchemas?: ConceptSchema[]
+    assets?: unknown[]
+  }
+  pages?: Array<{ entityLayouts?: V2EntityLayout[] }>
 }
 
 type ImportStats = {
@@ -97,19 +110,66 @@ export default async function importRoutes(app: FastifyInstance) {
     if (!body.format || !['narrasmith-project', 'narrasmith-fragment'].includes(body.format)) {
       return reply.code(400).send({ error: 'Invalid format. Expected narrasmith-project or narrasmith-fragment.' })
     }
-    if (body.version !== 1) {
-      return reply.code(400).send({ error: `Unsupported version: ${body.version}` })
+    if (body.version !== 1 && body.version !== 2) {
+      return reply.code(400).send({ error: `Unsupported version: ${body.version}. Expected 1 or 2.` })
     }
 
-    const nodes: ImportNode[] = body.format === 'narrasmith-fragment'
-      ? (body.nodes ?? [])
-      : (body.graph?.nodes ?? [])
-    const edges: ImportEdge[] = body.format === 'narrasmith-fragment'
-      ? (body.edges ?? [])
-      : (body.graph?.edges ?? [])
-    const entitySchemas: EntitySchema[] = body.entitySchema ?? []
-    const relSchemas: RelSchema[] = body.relationshipSchema ?? []
-    const conceptSchemas: ConceptSchema[] = body.conceptSchema ?? []
+    // ── Normalize v2 → flat arrays the rest of the route expects ─────
+    let nodes: ImportNode[]
+    let edges: ImportEdge[]
+    let entitySchemas: EntitySchema[]
+    let relSchemas: RelSchema[]
+    let conceptSchemas: ConceptSchema[]
+
+    if (body.version === 2 && body.world) {
+      const layoutMap = new Map<string, { x: number; y: number }>(
+        (body.pages?.[0]?.entityLayouts ?? []).map(l => [l.entityId, { x: l.x, y: l.y }])
+      )
+      nodes = (body.world.entities ?? []).map((e, i) => ({
+        id: e.id,
+        type: 'circle',
+        position: layoutMap.get(e.id) ?? { x: 100 + (i % 5) * 200, y: 100 + Math.floor(i / 5) * 200 },
+        data: {
+          label: e.label,
+          entityType: e.entityType,
+          typeId: e.typeId,
+          fields: e.fields ?? {},
+          description: e.description ?? '',
+          color: e.color,
+          sizeLevel: e.sizeLevel ?? 3,
+          concepts: e.concepts,
+        },
+      }))
+      edges = (body.world.relationships ?? []).map(r => ({
+        id: r.id,
+        source: r.source,
+        target: r.target,
+        ...(r.label != null && { label: r.label }),
+        data: {
+          labelT: r.labelT ?? 0.5,
+          color: r.color,
+          schemaColor: r.schemaColor,
+          relationshipTypeId: r.relationshipTypeId,
+          description: r.description,
+          whyItMatters: r.whyItMatters,
+        },
+      }))
+      entitySchemas  = body.world.entitySchemas  ?? []
+      relSchemas     = body.world.relationshipSchemas ?? []
+      conceptSchemas = body.world.conceptSchemas ?? []
+    } else if (body.format === 'narrasmith-fragment') {
+      nodes          = body.nodes ?? []
+      edges          = body.edges ?? []
+      entitySchemas  = body.entitySchema ?? []
+      relSchemas     = body.relationshipSchema ?? []
+      conceptSchemas = body.conceptSchema ?? []
+    } else {
+      nodes          = body.graph?.nodes ?? []
+      edges          = body.graph?.edges ?? []
+      entitySchemas  = body.entitySchema ?? []
+      relSchemas     = body.relationshipSchema ?? []
+      conceptSchemas = body.conceptSchema ?? []
+    }
 
     if (!Array.isArray(nodes)) {
       return reply.code(400).send({ error: 'nodes must be an array.' })

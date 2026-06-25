@@ -2,22 +2,23 @@ import { useRef, useState } from 'react'
 import type { ProjectData } from './projectStore'
 import {
   validateImportContent, buildContentPreview, buildMergePreview,
-  type NarrasmithExport, type NarrasmithFragment,
+  type NarrasmithExportV2, type NarrasmithExport, type NarrasmithFragment,
   type ImportPreview, type MergePreview, type MergeReport,
 } from './projectIO'
 
 export type ImportAction =
-  | { kind: 'new'; data: NarrasmithExport }
-  | { kind: 'merge'; data: NarrasmithExport | NarrasmithFragment }
+  | { kind: 'new'; data: NarrasmithExportV2 | NarrasmithExport }
+  | { kind: 'merge'; data: NarrasmithExportV2 | NarrasmithExport | NarrasmithFragment }
 
 type Props = {
   currentProject: ProjectData
   onConfirm: (action: ImportAction) => MergeReport | null | Promise<MergeReport | null>
   onCancel: () => void
+  importError?: string | null
 }
 
 type ContentData =
-  | { kind: 'project'; data: NarrasmithExport }
+  | { kind: 'project'; data: NarrasmithExportV2 | NarrasmithExport }
   | { kind: 'fragment'; data: NarrasmithFragment }
 
 type Step =
@@ -26,7 +27,7 @@ type Step =
   | { kind: 'merge-preview'; content: ContentData; mergePreview: MergePreview }
   | { kind: 'report'; report: MergeReport }
 
-export function ImportModal({ currentProject, onConfirm, onCancel }: Props) {
+export function ImportModal({ currentProject, onConfirm, onCancel, importError }: Props) {
   const [tab, setTab] = useState<'file' | 'paste'>('file')
   const [step, setStep] = useState<Step>({ kind: 'input' })
   const [pasteText, setPasteText] = useState('')
@@ -73,7 +74,8 @@ export function ImportModal({ currentProject, onConfirm, onCancel }: Props) {
           <h2 style={heading}>Import Complete</h2>
 
           <Section label="Added">
-            <Row label="Nodes" value={String(r.nodesAdded)} accent="#16a34a" />
+            <Row label="Entities" value={String(r.nodesAdded)} accent="#16a34a" />
+            {r.assetsAdded > 0 && <Row label="Assets" value={String(r.assetsAdded)} accent="#16a34a" />}
             <Row label="Relationships" value={String(r.edgesAdded)} accent="#16a34a" />
             <Row label="Entity Schemas" value={String(r.entitySchemasAdded)} accent="#16a34a" />
             <Row label="Relationship Schemas" value={String(r.relSchemasAdded)} accent="#16a34a" />
@@ -106,7 +108,8 @@ export function ImportModal({ currentProject, onConfirm, onCancel }: Props) {
           <p style={subtitle}>These changes will be added to your current project.</p>
 
           <Section label="Will be added">
-            <Row label="Nodes" value={`+${mp.nodesToAdd}`} accent="#16a34a" />
+            <Row label="Entities" value={`+${mp.nodesToAdd}`} accent="#16a34a" />
+            {mp.assetsToAdd > 0 && <Row label="Assets" value={`+${mp.assetsToAdd}`} accent="#16a34a" />}
             <Row label="Relationships" value={`+${mp.edgesToAdd}`} accent="#16a34a" />
             <Row label="Entity Schemas" value={`+${mp.entitySchemasToAdd}`} accent="#16a34a" />
             <Row label="Relationship Schemas" value={`+${mp.relSchemasToAdd}`} accent="#16a34a" />
@@ -147,17 +150,24 @@ export function ImportModal({ currentProject, onConfirm, onCancel }: Props) {
 
           <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginBottom: 20 }}>
             <Row label={isFragment ? 'Fragment' : 'Project Name'} value={p.projectName} />
-            <Row label="Nodes" value={String(p.nodeCount)} />
+            <Row label="Entities" value={String(p.nodeCount)} />
+            {p.assetCount > 0 && <Row label="Assets" value={String(p.assetCount)} />}
             <Row label="Relationships" value={String(p.edgeCount)} />
             <Row label="Entity Schemas" value={String(p.entitySchemaCount)} />
             <Row label="Relationship Schemas" value={String(p.relationshipSchemaCount)} />
             <Row label="Concept Schemas" value={String(p.conceptSchemaCount)} />
           </div>
 
+          {importError && (
+            <div style={{ marginBottom: 12, padding: '8px 12px', background: '#fef2f2', border: '1px solid #fecaca', borderRadius: 6, fontSize: 13, color: '#dc2626' }}>
+              {importError}
+            </div>
+          )}
+
           <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginBottom: 8 }}>
             {!isFragment && (
               <button onClick={() => {
-                onConfirm({ kind: 'new', data: (step.content as { kind: 'project'; data: NarrasmithExport }).data })
+                onConfirm({ kind: 'new', data: (step.content as { kind: 'project'; data: NarrasmithExportV2 | NarrasmithExport }).data })
               }} style={confirmBtn}>
                 Import as New Project
               </button>
