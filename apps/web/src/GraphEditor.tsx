@@ -178,6 +178,12 @@ export function GraphEditor({ projectId, onBackToDashboard }: GraphEditorProps) 
     () => (activeProject.graph as any).rootNodeId ?? null,
   )
 
+  const [inspectorWidth, setInspectorWidth] = useState<number>(() => {
+    const saved = localStorage.getItem('narrasmith.inspector.width')
+    return saved ? parseInt(saved, 10) : 420
+  })
+  const isDraggingInspector = useRef(false)
+
   const schemaRef   = useRef(schemaTypes)
   const relTypesRef = useRef(relTypes)
   useEffect(() => { schemaRef.current   = schemaTypes }, [schemaTypes])
@@ -501,6 +507,26 @@ export function GraphEditor({ projectId, onBackToDashboard }: GraphEditorProps) 
     setCtxMenu(null)
     if (draggingImageId) exitImageDragMode()
   }, [draggingImageId, exitImageDragMode])
+
+  // ── Inspector resize ──────────────────────────────────────────────────
+  const onInspectorHandlePointerDown = useCallback((e: React.PointerEvent) => {
+    e.preventDefault()
+    isDraggingInspector.current = true
+    ;(e.target as HTMLElement).setPointerCapture(e.pointerId)
+  }, [])
+
+  const onInspectorHandlePointerMove = useCallback((e: React.PointerEvent) => {
+    if (!isDraggingInspector.current) return
+    setInspectorWidth(Math.max(320, Math.min(900, window.innerWidth - e.clientX)))
+  }, [])
+
+  const onInspectorHandlePointerUp = useCallback((e: React.PointerEvent) => {
+    if (!isDraggingInspector.current) return
+    isDraggingInspector.current = false
+    const w = Math.max(320, Math.min(900, window.innerWidth - e.clientX))
+    setInspectorWidth(w)
+    localStorage.setItem('narrasmith.inspector.width', String(w))
+  }, [])
 
   // ── Delete / reverse helpers ──────────────────────────────────────────
   const deleteEntity = useCallback((nodeId: string) => {
@@ -1008,11 +1034,24 @@ export function GraphEditor({ projectId, onBackToDashboard }: GraphEditorProps) 
       {/* Inspector panel */}
       {(selectedNode || selectedEdge) && (
         <aside style={{
-          width: 292, padding: '22px 18px',
+          width: inspectorWidth, padding: '22px 18px',
           borderLeft: '1px solid #e4e4e7', background: '#fafafa',
           display: 'flex', flexDirection: 'column', gap: 18, overflowY: 'auto',
-          flexShrink: 0,
+          flexShrink: 0, position: 'relative',
         }}>
+          {/* Resize handle */}
+          <div
+            onPointerDown={onInspectorHandlePointerDown}
+            onPointerMove={onInspectorHandlePointerMove}
+            onPointerUp={onInspectorHandlePointerUp}
+            style={{
+              position: 'absolute', left: 0, top: 0, bottom: 0, width: 8,
+              cursor: 'col-resize', zIndex: 10, userSelect: 'none',
+              transition: 'background 0.15s',
+            }}
+            onMouseEnter={e => { (e.currentTarget as HTMLDivElement).style.background = 'rgba(99,102,241,0.18)' }}
+            onMouseLeave={e => { (e.currentTarget as HTMLDivElement).style.background = 'transparent' }}
+          />
           {selectedNode && isCanvasImageNode && selectedCanvasImage && (
             <CanvasImageInspector
               image={selectedCanvasImage}
