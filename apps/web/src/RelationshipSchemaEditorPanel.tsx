@@ -2,7 +2,7 @@ import { useState } from 'react'
 import { ColorPicker } from './ColorPicker'
 import {
   resolveRelationshipType, uid,
-  type RelationshipType,
+  type RelationshipType, type RelationshipDirection,
 } from './relationshipSchema'
 
 type Props = {
@@ -172,6 +172,18 @@ export function RelationshipSchemaEditorPanel({ relationshipTypes, onChange, onC
                   </div>
                 </EditorField>
 
+                <EditorField label="Default Direction">
+                  <SchemaDirectionControl
+                    direction={selected.defaultDirection ?? 'undirected'}
+                    onChange={d => updateType({ ...(d === 'undirected' ? { defaultDirection: undefined } : { defaultDirection: d }) })}
+                  />
+                  {selected.parentId && !selected.defaultDirection && resolvedSelected?.defaultDirection && (
+                    <span style={{ fontSize: 11, color: '#a1a1aa', marginTop: 4 }}>
+                      ↑ inherited: {resolvedSelected.defaultDirection}
+                    </span>
+                  )}
+                </EditorField>
+
                 <div style={{ paddingTop: 8, borderTop: '1px solid #fee2e2', marginTop: 'auto' }}>
                   <button
                     onClick={deleteType}
@@ -254,6 +266,35 @@ function EditorField({ label, children }: { label: string; children: React.React
         {label}
       </span>
       {children}
+    </div>
+  )
+}
+
+function SchemaDirectionControl({ direction, onChange }: { direction: RelationshipDirection; onChange: (d: RelationshipDirection) => void }) {
+  const opts: { value: RelationshipDirection; label: string; title: string }[] = [
+    { value: 'undirected',    label: '—',  title: 'No default (undirected)' },
+    { value: 'directed',      label: '→',  title: 'Directed (A → B)' },
+    { value: 'bidirectional', label: '⇄', title: 'Bidirectional (A ⇄ B)' },
+  ]
+  return (
+    <div style={{ display: 'flex', gap: 4 }}>
+      {opts.map(opt => (
+        <button
+          key={opt.value}
+          title={opt.title}
+          onClick={() => onChange(opt.value)}
+          style={{
+            flex: 1, padding: '5px 0', fontFamily: 'inherit',
+            border: `1.5px solid ${direction === opt.value ? '#7c3aed' : '#d4d4d8'}`,
+            borderRadius: 6,
+            background: direction === opt.value ? '#f3f0ff' : 'transparent',
+            color: direction === opt.value ? '#5b21b6' : '#52525b',
+            fontSize: 14, fontWeight: 700, cursor: 'pointer',
+          }}
+        >
+          {opt.label}
+        </button>
+      ))}
     </div>
   )
 }

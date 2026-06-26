@@ -33,6 +33,7 @@ type SyncBody = {
         relationshipTypeId?: string
         description?: string
         whyItMatters?: string
+        direction?: string
       }
     }>
     rootNodeId?: string
@@ -370,6 +371,7 @@ export default async function syncRoutes(app: FastifyInstance) {
                 schemaColor: e.data?.schemaColor ?? null,
                 description: e.data?.description ?? null,
                 whyItMatters: e.data?.whyItMatters ?? null,
+                direction: e.data?.direction ?? null,
                 sourceHandle: e.sourceHandle ?? null,
                 targetHandle: e.targetHandle ?? null,
               } as Record<string, Json>,

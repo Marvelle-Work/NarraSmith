@@ -9,7 +9,9 @@ import {
   useNodesState,
   useEdgesState,
   useReactFlow,
+  MarkerType,
   type Edge,
+  type EdgeMarker,
   type Connection,
   type NodeMouseHandler,
   type EdgeMouseHandler,
@@ -21,7 +23,7 @@ import { RelationshipModal } from './RelationshipModal'
 import { SchemaEditorPanel } from './SchemaEditorPanel'
 import { RelationshipSchemaEditorPanel } from './RelationshipSchemaEditorPanel'
 import { ColorPicker } from './ColorPicker'
-import { entityColors, edgeStyleForLabel, SIZE_LEVELS, type FieldBlock, type GraphNode, type NodeData, type SizeLevel } from './types'
+import { entityColors, edgeStyleForLabel, SIZE_LEVELS, type FieldBlock, type GraphNode, type NodeData, type SizeLevel, type RelationshipDirection } from './types'
 import { resolveFields, type SchemaType, type ResolvedField } from './schema'
 import { FieldBlockEditor } from './FieldBlockEditor'
 import { resolveRelationshipType, type RelationshipType } from './relationshipSchema'
@@ -128,18 +130,22 @@ function normalizeGraph(
     }))
   const edges: Edge[] = raw.edges
     .filter((e: any) => e.type !== 'tether')
-    .map((e: any) => ({
-      ...e,
-      type: 'relationship',
-      data: {
-        labelT:             e.data?.labelT ?? 0.5,
-        color:              e.data?.color,
-        schemaColor:        e.data?.schemaColor,
-        relationshipTypeId: e.data?.relationshipTypeId,
-        description:        e.data?.description,
-        whyItMatters:       e.data?.whyItMatters,
-      },
-    }))
+    .map((e: any) => {
+      const built: Edge = {
+        ...e,
+        type: 'relationship',
+        data: {
+          labelT:             e.data?.labelT ?? 0.5,
+          color:              e.data?.color,
+          schemaColor:        e.data?.schemaColor,
+          relationshipTypeId: e.data?.relationshipTypeId,
+          description:        e.data?.description,
+          whyItMatters:       e.data?.whyItMatters,
+          direction:          (e.data?.direction ?? 'undirected') as RelationshipDirection,
+        },
+      }
+      return applyDirectionMarkers(built)
+    })
   const tetherEdges: Edge[] = raw.edges
     .filter((e: any) => e.type === 'tether')
     .map((e: any) => ({ ...e, type: 'tether' }))
@@ -159,6 +165,26 @@ function resolveEdgeStyle(
   const schemaColor = resolved?.defaultColor
   if (schemaColor) return { style: { stroke: schemaColor, strokeWidth: 2 }, schemaColor }
   return { style: edgeStyleForLabel(label).style, schemaColor: undefined }
+}
+
+// ── Direction markers ─────────────────────────────────────────────────────
+
+function applyDirectionMarkers(edge: Edge): Edge {
+  const direction = (edge.data?.direction as RelationshipDirection | undefined) ?? 'undirected'
+  // Strip any existing markers, then re-apply based on direction.
+  // We mutate a shallow copy — never the original edge object.
+  const next = { ...edge } as Edge & { markerEnd?: EdgeMarker | string; markerStart?: EdgeMarker | string }
+  delete next.markerEnd
+  delete next.markerStart
+  if (direction === 'undirected') return next
+  const manualColor  = edge.data?.color        as string | undefined
+  const schemaColor  = edge.data?.schemaColor  as string | undefined
+  const styleStroke  = (edge.style as React.CSSProperties | undefined)?.stroke as string | undefined
+  const color = manualColor ?? schemaColor ?? styleStroke ?? '#a1a1aa'
+  const marker: EdgeMarker = { type: MarkerType.ArrowClosed, color, width: 20, height: 20 }
+  next.markerEnd = marker
+  if (direction === 'bidirectional') next.markerStart = marker
+  return next
 }
 
 // ── Component ────────────────────────────────────────────────────────────
@@ -605,12 +631,15 @@ export function GraphEditor({ projectId, onBackToDashboard }: GraphEditorProps) 
   const confirmRelationship = useCallback((label: string, relationshipTypeId?: string) => {
     if (!pendingConn) return
     const { style, schemaColor } = resolveEdgeStyle(label, relationshipTypeId, relTypesRef.current, undefined)
-    setEdges(eds => addEdge({
+    const resolved = relationshipTypeId ? resolveRelationshipType(relationshipTypeId, relTypesRef.current) : null
+    const direction: RelationshipDirection = resolved?.defaultDirection ?? 'undirected'
+    const newEdge: Edge = {
       ...pendingConn,
       id: `edge-${Date.now()}`,
       label, type: 'relationship', style,
-      data: { labelT: 0.5, relationshipTypeId, schemaColor },
-    }, eds))
+      data: { labelT: 0.5, relationshipTypeId, schemaColor, direction },
+    }
+    setEdges(eds => addEdge(applyDirectionMarkers(newEdge), eds))
     setPendingConn(null)
   }, [pendingConn, setEdges])
 
@@ -748,10 +777,10 @@ export function GraphEditor({ projectId, onBackToDashboard }: GraphEditorProps) 
       const manualColor = e.data?.color as string | undefined
       const styleResult = resolveEdgeStyle(typeof e.label === 'string' ? e.label : '', typeId, relTypesRef.current, manualColor)
       const label = (typeof e.label !== 'string' || e.label.trim() === '') ? (resolved?.name ?? e.label) : e.label
-      return {
+      return applyDirectionMarkers({
         ...e, label, style: styleResult.style,
         data: { ...e.data, relationshipTypeId: typeId, schemaColor: manualColor ? undefined : schemaColor },
-      }
+      })
     }))
   }, [selectedEdgeId, setEdges])
 
@@ -759,19 +788,28 @@ export function GraphEditor({ projectId, onBackToDashboard }: GraphEditorProps) 
     if (!selectedEdgeId) return
     setEdges(eds => eds.map(e => {
       if (e.id !== selectedEdgeId) return e
-      return {
+      return applyDirectionMarkers({
         ...e,
         data: { ...e.data, relationshipTypeId: undefined, schemaColor: undefined },
         ...(!(e.data?.color) ? edgeStyleForLabel(typeof e.label === 'string' ? e.label : '') : {}),
-      }
+      })
     }))
   }, [selectedEdgeId, setEdges])
 
   const updateEdgeColor = useCallback((color: string) => {
     if (!selectedEdgeId) return
-    setEdges(eds => eds.map(e =>
-      e.id !== selectedEdgeId ? e : { ...e, data: { ...e.data, color: color || undefined } }
-    ))
+    setEdges(eds => eds.map(e => {
+      if (e.id !== selectedEdgeId) return e
+      return applyDirectionMarkers({ ...e, data: { ...e.data, color: color || undefined } })
+    }))
+  }, [selectedEdgeId, setEdges])
+
+  const updateEdgeDirection = useCallback((direction: RelationshipDirection) => {
+    if (!selectedEdgeId) return
+    setEdges(eds => eds.map(e => {
+      if (e.id !== selectedEdgeId) return e
+      return applyDirectionMarkers({ ...e, data: { ...e.data, direction } })
+    }))
   }, [selectedEdgeId, setEdges])
 
   // ── Asset management ──────────────────────────────────────────────────
@@ -1226,6 +1264,7 @@ export function GraphEditor({ projectId, onBackToDashboard }: GraphEditorProps) 
                 onUpdateDescription={updateEdgeDescription}
                 onUpdateWhyItMatters={updateEdgeWhyItMatters}
                 onUpdateColor={updateEdgeColor}
+                onUpdateDirection={updateEdgeDirection}
               />
             : <SystemEdgePanel
                 edge={selectedEdge} nodes={nodes} relTypes={relTypes}
@@ -1234,6 +1273,7 @@ export function GraphEditor({ projectId, onBackToDashboard }: GraphEditorProps) 
                 onUpdateColor={updateEdgeColor}
                 onUpdateTypeId={updateEdgeTypeId}
                 onClearTypeId={clearEdgeTypeId}
+                onUpdateDirection={updateEdgeDirection}
               />
           )}
         </aside>
@@ -1560,6 +1600,7 @@ type StoryEdgePanelProps = {
   onUpdateDescription: (d: string) => void
   onUpdateWhyItMatters?: (w: string) => void
   onUpdateColor: (c: string) => void
+  onUpdateDirection: (d: RelationshipDirection) => void
 }
 
 type SystemEdgePanelProps = StoryEdgePanelProps & {
@@ -1885,7 +1926,8 @@ function SystemEntityPanel({ node, schemaTypes, conceptSchemas, resolvedFields, 
 
 // ── Story-mode edge panel ─────────────────────────────────────────────────
 
-function StoryEdgePanel({ edge, nodes, onUpdateLabel, onUpdateDescription, onUpdateWhyItMatters = () => {}, onUpdateColor }: StoryEdgePanelProps) {
+function StoryEdgePanel({ edge, nodes, onUpdateLabel, onUpdateDescription, onUpdateWhyItMatters = () => {}, onUpdateColor, onUpdateDirection }: StoryEdgePanelProps) {
+  const direction = (edge.data?.direction as RelationshipDirection | undefined) ?? 'undirected'
   const sourceName = nodes.find(n => n.id === edge.source)?.data.label ?? edge.source
   const targetName = nodes.find(n => n.id === edge.target)?.data.label ?? edge.target
   return (
@@ -1904,6 +1946,9 @@ function StoryEdgePanel({ edge, nodes, onUpdateLabel, onUpdateDescription, onUpd
           placeholder="e.g. Opposes, Loves, Created…"
           style={inputStyle}
         />
+      </PanelField>
+      <PanelField label="Direction">
+        <DirectionControl direction={direction} onChange={onUpdateDirection} />
       </PanelField>
       <PanelField label="Notes">
         <textarea
@@ -1930,7 +1975,8 @@ function StoryEdgePanel({ edge, nodes, onUpdateLabel, onUpdateDescription, onUpd
 
 // ── System-mode edge panel ────────────────────────────────────────────────
 
-function SystemEdgePanel({ edge, nodes, relTypes, onUpdateLabel, onUpdateDescription, onUpdateColor, onUpdateTypeId, onClearTypeId }: SystemEdgePanelProps) {
+function SystemEdgePanel({ edge, nodes, relTypes, onUpdateLabel, onUpdateDescription, onUpdateColor, onUpdateTypeId, onClearTypeId, onUpdateDirection }: SystemEdgePanelProps) {
+  const direction = (edge.data?.direction as RelationshipDirection | undefined) ?? 'undirected'
   const edgeTypeId = edge.data?.relationshipTypeId as string | undefined
   const resolvedType = edgeTypeId ? resolveRelationshipType(edgeTypeId, relTypes) : null
   const sourceName = nodes.find(n => n.id === edge.source)?.data.label ?? edge.source
@@ -1951,6 +1997,9 @@ function SystemEdgePanel({ edge, nodes, relTypes, onUpdateLabel, onUpdateDescrip
           placeholder="e.g. Opposes, Loves…"
           style={inputStyle}
         />
+      </PanelField>
+      <PanelField label="Direction">
+        <DirectionControl direction={direction} onChange={onUpdateDirection} />
       </PanelField>
       <PanelField label="Type">
         <div style={{ display: 'flex', flexWrap: 'wrap', gap: 5 }}>
@@ -2251,6 +2300,35 @@ function AppearanceField({
           </div>
         )}
       </div>
+    </div>
+  )
+}
+
+function DirectionControl({ direction, onChange }: { direction: RelationshipDirection; onChange: (d: RelationshipDirection) => void }) {
+  const opts: { value: RelationshipDirection; label: string; title: string }[] = [
+    { value: 'undirected',    label: '—',  title: 'Undirected' },
+    { value: 'directed',      label: '→',  title: 'Directed (A → B)' },
+    { value: 'bidirectional', label: '⇄', title: 'Bidirectional (A ⇄ B)' },
+  ]
+  return (
+    <div style={{ display: 'flex', gap: 4 }}>
+      {opts.map(opt => (
+        <button
+          key={opt.value}
+          title={opt.title}
+          onClick={() => onChange(opt.value)}
+          style={{
+            flex: 1, padding: '5px 0', fontFamily: 'inherit',
+            border: `1.5px solid ${direction === opt.value ? '#7c3aed' : '#d4d4d8'}`,
+            borderRadius: 6,
+            background: direction === opt.value ? '#f3f0ff' : 'transparent',
+            color: direction === opt.value ? '#5b21b6' : '#52525b',
+            fontSize: 14, fontWeight: 700, cursor: 'pointer',
+          }}
+        >
+          {opt.label}
+        </button>
+      ))}
     </div>
   )
 }

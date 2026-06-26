@@ -1,4 +1,7 @@
 import { uid } from './schema'
+import type { RelationshipDirection } from './types'
+
+export type { RelationshipDirection }
 
 export type RelationshipType = {
   id: string
@@ -6,6 +9,7 @@ export type RelationshipType = {
   parentId?: string
   description?: string
   defaultColor?: string
+  defaultDirection?: RelationshipDirection
 }
 
 export const REL_SCHEMA_STORAGE_KEY = 'narrasmith-relationship-schema'
@@ -41,9 +45,12 @@ export function resolveRelationshipType(id: string, types: RelationshipType[]): 
   return {
     id: type.id,
     parentId: type.parentId,
-    name:         type.name         || parent.name,
-    description:  type.description  || parent.description,
-    defaultColor: type.defaultColor || parent.defaultColor,
+    name:             type.name             || parent.name,
+    description:      type.description      || parent.description,
+    defaultColor:     type.defaultColor     || parent.defaultColor,
+    ...(type.defaultDirection ?? parent.defaultDirection
+      ? { defaultDirection: type.defaultDirection ?? parent.defaultDirection }
+      : {}),
   }
 }
 

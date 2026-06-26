@@ -41,6 +41,8 @@ export type NodeData = {
 
 export type GraphNode = Node<NodeData>
 
+export type RelationshipDirection = 'undirected' | 'directed' | 'bidirectional'
+
 export type EdgeData = {
   labelT?: number
   color?: string
@@ -48,6 +50,7 @@ export type EdgeData = {
   relationshipTypeId?: string
   description?: string
   whyItMatters?: string
+  direction?: RelationshipDirection
 }
 
 export type AssetEntryType = 'music' | 'image' | 'document' | 'link' | 'custom'
