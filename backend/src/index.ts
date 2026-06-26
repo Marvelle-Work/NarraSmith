@@ -10,6 +10,7 @@ import nodesRoutes from './routes/nodes.js'
 import relationshipTypesRoutes from './routes/relationship-types.js'
 import relationshipsRoutes from './routes/relationships.js'
 import syncRoutes from './routes/sync.js'
+import authRoutes from './routes/auth.js'
 
 declare module 'fastify' {
   interface FastifyRequest {
@@ -29,6 +30,7 @@ await app.register(cors, {
 })
 
 app.get('/health', async () => ({ status: 'ok' }))
+app.register(authRoutes)
 
 app.get<{ Params: { shareId: string } }>('/shared/:shareId', async (req, reply) => {
   const { data, error } = await db

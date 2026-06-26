@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import { useAuth } from './AuthProvider'
+import { API_BASE } from '../api/client'
 
 type Props = {
   onSwitchToLogin: () => void
@@ -13,6 +14,9 @@ export function SignupPage({ onSwitchToLogin }: Props) {
   const [error, setError] = useState<string | null>(null)
   const [success, setSuccess] = useState(false)
   const [loading, setLoading] = useState(false)
+  const [resendState, setResendState] = useState<'idle' | 'sending' | 'sent' | 'error'>('idle')
+  const [resendError, setResendError] = useState<string | null>(null)
+  const [resendCooldown, setResendCooldown] = useState(0)
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
@@ -37,13 +41,71 @@ export function SignupPage({ onSwitchToLogin }: Props) {
     }
   }
 
+  const handleResend = async () => {
+    setResendState('sending')
+    setResendError(null)
+    try {
+      const res = await fetch(`${API_BASE}/auth/send-verification`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email }),
+      })
+      if (res.status === 429) {
+        const body = await res.json() as { retryAfter?: number }
+        setResendCooldown(body.retryAfter ?? 60)
+        setResendState('idle')
+        return
+      }
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({})) as { error?: string }
+        setResendError(body.error ?? 'Failed to resend. Please try again.')
+        setResendState('error')
+        return
+      }
+      setResendState('sent')
+      setResendCooldown(60)
+      const tick = setInterval(() => {
+        setResendCooldown(c => {
+          if (c <= 1) { clearInterval(tick); setResendState('idle'); return 0 }
+          return c - 1
+        })
+      }, 1000)
+    } catch {
+      setResendError('Network error. Please try again.')
+      setResendState('error')
+    }
+  }
+
   if (success) {
     return (
       <div style={container}>
         <div style={card}>
           <h1 style={title}>Narrasmith</h1>
           <p style={successMsg}>Check your email for a confirmation link.</p>
-          <button onClick={onSwitchToLogin} style={primaryBtn}>Back to Sign In</button>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+            {resendState === 'sent' && (
+              <p style={{ margin: 0, fontSize: 13, color: '#16a34a', textAlign: 'center' }}>
+                Email resent!
+              </p>
+            )}
+            {resendError && (
+              <p style={{ margin: 0, fontSize: 13, color: '#dc2626', textAlign: 'center' }}>
+                {resendError}
+              </p>
+            )}
+            <button
+              onClick={handleResend}
+              disabled={resendState === 'sending' || resendCooldown > 0}
+              style={{ ...secondaryBtn, opacity: (resendState === 'sending' || resendCooldown > 0) ? 0.5 : 1 }}
+            >
+              {resendState === 'sending'
+                ? 'Sending...'
+                : resendCooldown > 0
+                  ? `Resend in ${resendCooldown}s`
+                  : 'Resend verification email'}
+            </button>
+            <button onClick={onSwitchToLogin} style={primaryBtn}>Back to Sign In</button>
+          </div>
         </div>
       </div>
     )
@@ -138,6 +200,12 @@ const primaryBtn: React.CSSProperties = {
   border: 'none', background: '#18181b', color: '#fff',
   fontWeight: 700, fontSize: 14, cursor: 'pointer',
   marginTop: 4,
+}
+
+const secondaryBtn: React.CSSProperties = {
+  padding: '11px 20px', borderRadius: 8,
+  border: '1px solid #d4d4d8', background: '#fff', color: '#18181b',
+  fontWeight: 600, fontSize: 14, cursor: 'pointer',
 }
 
 const errorBox: React.CSSProperties = {

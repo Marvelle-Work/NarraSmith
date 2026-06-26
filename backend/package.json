@@ -13,7 +13,8 @@
     "@narrasmith/shared-types": "*",
     "@supabase/supabase-js": "^2.108.1",
     "dotenv": "^17.4.2",
-    "fastify": "^5.8.5"
+    "fastify": "^5.8.5",
+    "resend": "^6.16.0"
   },
   "devDependencies": {
     "@types/node": "^25.9.3",
