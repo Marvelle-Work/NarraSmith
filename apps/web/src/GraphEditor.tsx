@@ -50,6 +50,9 @@ import { ImportModal, type ImportAction } from './ImportModal'
 import { ExportModal } from './ExportModal'
 import { useAutoSave } from './hooks/useAutoSave'
 import { getProjectData, updateProject } from './api/projects'
+import { logger } from './lib/logger'
+import { updateDiagnosticsSnapshot, startStage, completeStage, addMismatchAlerts } from './lib/diagnostics'
+import { Trace, detectMismatches } from './lib/trace'
 
 const nodeTypes = { circle: CircleNode, asset: AssetNode, 'canvas-image': CanvasImageNode }
 const edgeTypes = { relationship: RelationshipEdge, tether: TetherEdge }
@@ -70,13 +73,18 @@ const DEFAULT_GRAPH: { nodes: GraphNode[]; edges: Edge[] } = {
 
 // ── Graph normalization (forward-migrations on raw stored data) ──────────
 
-function normalizeGraph(raw: { nodes: any[]; edges: any[]; rootNodeId?: string }): { nodes: GraphNode[]; edges: Edge[] } {
-  if (!raw.nodes || raw.nodes.length === 0) return DEFAULT_GRAPH
+function normalizeGraph(
+  raw: { nodes: any[]; edges: any[]; rootNodeId?: string },
+  opts: { showDefault?: boolean } = {},
+): { nodes: GraphNode[]; edges: Edge[] } {
+  if (!raw.nodes || raw.nodes.length === 0) {
+    return opts.showDefault !== false ? DEFAULT_GRAPH : { nodes: [], edges: [] }
+  }
   const rootId = raw.rootNodeId
   const nodes: GraphNode[] = raw.nodes
     .filter((n: any) => {
       if (n.type !== 'circle' && n.type !== 'asset' && n.type !== 'canvas-image') {
-        console.warn(`[Narrasmith] Unknown node type "${n.type}" on node "${n.id ?? '(no id)'}" — falling back to entity node.`)
+        logger.warn('GRAPH', `Unknown node type "${n.type}" on node "${n.id ?? '(no id)'}" — treating as entity node`)
       }
       return n.type !== 'asset' && n.type !== 'canvas-image'
     })
@@ -167,20 +175,39 @@ export function GraphEditor({ projectId, onBackToDashboard }: GraphEditorProps) 
   const storeRef = useRef<ProjectStore>(loadProjectStore())
   storeRef.current = { ...storeRef.current, activeProjectId: projectId }
   const activeProject = getActiveProject(storeRef.current)
+  // True only when the project is already present in the local store under
+  // the exact projectId.  Cloud-created projects arrive with a UUID that
+  // doesn't exist locally yet, so getActiveProject() falls back to the
+  // first stored project — which we must NOT use as initial state.
+  const isKnownLocally = !!storeRef.current.projects[projectId]
 
   // ── Initialize state from active project ─────────────────────────────
-  const initial = useMemo(() => normalizeGraph(activeProject.graph as any), [])
+  // If the project isn't in local store (e.g. freshly cloud-created from a
+  // template), start with empty state so the cloud load can populate it
+  // without fighting a stale "fallback" project's data.
+  const initial = useMemo(
+    () => isKnownLocally ? normalizeGraph(activeProject.graph as any) : { nodes: [], edges: [] },
+    [], // eslint-disable-line react-hooks/exhaustive-deps
+  )
   const [nodes, setNodes, onNodesChange] = useNodesState<GraphNode>(initial.nodes)
   const [edges, setEdges, onEdgesChange] = useEdgesState(initial.edges)
-  const [schemaTypes, setSchemaTypes]     = useState<SchemaType[]>(() => activeProject.entitySchema)
-  const [relTypes, setRelTypes]           = useState<RelationshipType[]>(() => activeProject.relSchema)
-  const [conceptSchema, setConceptSchema] = useState<ConceptSchemaType[]>(
-    () => activeProject.conceptSchema ?? DEFAULT_CONCEPT_SCHEMAS,
+  const [schemaTypes, setSchemaTypes] = useState<SchemaType[]>(
+    () => isKnownLocally ? activeProject.entitySchema : [],
   )
-  const [assets, setAssets] = useState<AssetData[]>(() => activeProject.assets ?? [])
-  const [canvasImages, setCanvasImages] = useState<CanvasImage[]>(() => activeProject.canvasImages ?? [])
+  const [relTypes, setRelTypes] = useState<RelationshipType[]>(
+    () => isKnownLocally ? activeProject.relSchema : [],
+  )
+  const [conceptSchema, setConceptSchema] = useState<ConceptSchemaType[]>(
+    () => isKnownLocally ? (activeProject.conceptSchema ?? DEFAULT_CONCEPT_SCHEMAS) : DEFAULT_CONCEPT_SCHEMAS,
+  )
+  const [assets, setAssets] = useState<AssetData[]>(
+    () => isKnownLocally ? (activeProject.assets ?? []) : [],
+  )
+  const [canvasImages, setCanvasImages] = useState<CanvasImage[]>(
+    () => isKnownLocally ? (activeProject.canvasImages ?? []) : [],
+  )
   const [rootNodeId, setRootNodeId] = useState<string | null>(
-    () => (activeProject.graph as any).rootNodeId ?? null,
+    () => isKnownLocally ? ((activeProject.graph as any).rootNodeId ?? null) : null,
   )
 
   const [inspectorWidth, setInspectorWidth] = useState<number>(() => {
@@ -205,39 +232,110 @@ export function GraphEditor({ projectId, onBackToDashboard }: GraphEditorProps) 
   const { save: autoSave, setVersion } = useAutoSave(projectId)
   const cloudLoadedRef = useRef(false)
 
-  // ── Cloud load — fetch API data and reconcile with local cache ────────
+  // ── Cloud load — fetch and apply cloud state (cloud is authoritative) ───
+  // v2 architecture: cloud is the single source of truth on editor entry.
+  // Local cache is a write-through cache populated AFTER cloud loads, never
+  // a conflict-resolution peer. Timestamp comparison has been removed because:
+  //   1. The persistence effect writes stale data with updatedAt=NOW before
+  //      the async fetch resolves, making any local entry appear "newer".
+  //   2. React StrictMode double-invokes effects, compounding the race.
+  //   3. Architecturally: autoSave always syncs local→cloud, so if a cloud
+  //      fetch succeeds the cloud data is authoritative by definition.
+  // Fallback: if cloud fetch fails, local cache is used as-is.
   useEffect(() => {
     let cancelled = false
+    // Keep reference for diagnostic logging only — not used for hydration decisions.
+    const localProjectForDiagnostics = storeRef.current.projects[projectId]
+    const trace = new Trace('OPEN_PROJECT').activate()
+    const localNodeCountBefore = (localProjectForDiagnostics?.graph as any)?.nodes?.length ?? 0
+
+    logger.debug('GRAPH', 'Cloud load starting', { projectId })
+    startStage('Runtime Graph', localNodeCountBefore)
+    logger.time(`CLOUD_LOAD_${projectId}`)
+
     getProjectData(projectId)
       .then(({ projectData: cloudData, version }) => {
         if (cancelled) return
+        logger.timeEnd(`CLOUD_LOAD_${projectId}`)
+
         if (cloudData) {
           setVersion(version)
-          const localProject = storeRef.current.projects[projectId]
-          const cloudTime = new Date(cloudData.updatedAt).getTime()
-          const localTime = localProject ? new Date(localProject.updatedAt).getTime() : 0
-          if (cloudTime >= localTime) {
-            const normalized = normalizeGraph(cloudData.graph as any)
-            setNodes(normalized.nodes)
-            setEdges(normalized.edges)
-            setSchemaTypes(cloudData.entitySchema)
-            setRelTypes(cloudData.relSchema)
-            setConceptSchema(cloudData.conceptSchema ?? [])
-            setAssets(cloudData.assets ?? [])
-            setCanvasImages(cloudData.canvasImages ?? [])
-            setProjectName(cloudData.name)
-            setRootNodeId((cloudData.graph as any).rootNodeId ?? null)
-            storeRef.current.projects[projectId] = cloudData
-            saveProjectStore(storeRef.current)
-          }
+          const cloudRawNodeCount = (cloudData.graph as any)?.nodes?.length ?? 0
+
+          logger.info('GRAPH', 'Cloud data received — applying (cloud is authoritative)', {
+            projectId,
+            cloudUpdatedAt: cloudData.updatedAt,
+            localUpdatedAt: localProjectForDiagnostics?.updatedAt ?? '(no local entry)',
+            cloudNodeCount: cloudRawNodeCount,
+            localNodeCount: (localProjectForDiagnostics?.graph as any)?.nodes?.length ?? 0,
+            cloudEntitySchemas: cloudData.entitySchema?.length ?? 0,
+          })
+
+          const normalized = normalizeGraph(cloudData.graph as any, { showDefault: false })
+          setNodes(normalized.nodes)
+          setEdges(normalized.edges)
+          setSchemaTypes(cloudData.entitySchema)
+          setRelTypes(cloudData.relSchema)
+          setConceptSchema(cloudData.conceptSchema ?? [])
+          setAssets(cloudData.assets ?? [])
+          setCanvasImages(cloudData.canvasImages ?? [])
+          setProjectName(cloudData.name)
+          setRootNodeId((cloudData.graph as any).rootNodeId ?? null)
+          storeRef.current.projects[projectId] = cloudData
+          saveProjectStore(storeRef.current)
+
+          const graphAlerts = detectMismatches('GRAPH_HYDRATE', {
+            templateNodeCount: cloudRawNodeCount,
+            currentNodeCount: normalized.nodes.filter((n: any) => n.type === 'circle').length,
+            cloudId: projectId,
+            storeHasCloudId: true,
+            rootNodeId: (cloudData.graph as any).rootNodeId ?? null,
+            hasPages: false,
+          }, trace.id)
+          addMismatchAlerts(graphAlerts)
+
+          const finalStatus = normalized.nodes.length === 0
+            ? 'warn'
+            : graphAlerts.some(a => a.severity === 'error') ? 'error'
+            : graphAlerts.length > 0 ? 'warn' : 'ok'
+
+          completeStage('Runtime Graph', finalStatus, {
+            meta: { source: 'cloud', nodeCount: normalized.nodes.length, edgeCount: normalized.edges.length },
+            nodeCountAfter: normalized.nodes.length,
+            alerts: graphAlerts,
+          })
+
+          logger.info('GRAPH', 'Applied cloud state to editor', {
+            nodes: normalized.nodes.length,
+            edges: normalized.edges.length,
+            entitySchemas: cloudData.entitySchema?.length ?? 0,
+          })
+
+          logger.assert(
+            normalized.nodes.length > 0 || cloudRawNodeCount === 0,
+            'GRAPH',
+            'Cloud had nodes but normalizeGraph produced 0 — data may be lost',
+            { rawNodeCount: cloudRawNodeCount },
+          )
+        } else {
+          // Cloud returned no data — fall back to whatever is in local cache
+          logger.warn('GRAPH', 'Cloud returned no data — using local state as fallback', { projectId })
+          completeStage('Runtime Graph', 'warn', { meta: { reason: 'no cloud data, using local fallback' } })
         }
         cloudLoadedRef.current = true
       })
       .catch(err => {
-        console.warn('Failed to load from cloud, using local cache:', err)
-        cloudLoadedRef.current = true
+        if (!cancelled) {
+          logger.timeEnd(`CLOUD_LOAD_${projectId}`)
+          logger.warn('NETWORK', 'Cloud load failed — using local cache', { err: String(err) })
+          completeStage('Runtime Graph', 'warn', { meta: { reason: 'cloud load failed, using local fallback' } })
+          cloudLoadedRef.current = true
+        }
       })
-    return () => { cancelled = true }
+    return () => {
+      cancelled = true
+      trace.deactivate()
+    }
   }, [projectId]) // eslint-disable-line react-hooks/exhaustive-deps
 
   // ── UI state ──────────────────────────────────────────────────────────
@@ -276,8 +374,14 @@ export function GraphEditor({ projectId, onBackToDashboard }: GraphEditorProps) 
   // ── Import / Export ────────────────────────────────────────────────────
   const handleExport = useCallback(() => {
     const exportedProject = storeRef.current.projects[storeRef.current.activeProjectId]
-    console.log('[Narrasmith] Exporting assets', exportedProject?.assets)
+    logger.info('EXPORT', 'Export started', {
+      projectId: exportedProject?.id,
+      nodeCount: (exportedProject?.graph.nodes as any[])?.filter(n => n.type === 'circle').length ?? 0,
+      assetCount: exportedProject?.assets?.length ?? 0,
+    })
+    logger.time('EXPORT_BUILD')
     setExportPayload(buildExportPayload(storeRef.current))
+    logger.timeEnd('EXPORT_BUILD')
   }, [])
 
   const handleImportAction = useCallback((action: ImportAction) => {
@@ -285,7 +389,7 @@ export function GraphEditor({ projectId, onBackToDashboard }: GraphEditorProps) 
       const next = importProject(action.data, storeRef.current)
       storeRef.current = next
       const project = getActiveProject(next)
-      const normalized = normalizeGraph(project.graph as any)
+      const normalized = normalizeGraph(project.graph as any, { showDefault: false })
       setNodes(normalized.nodes)
       setEdges(normalized.edges)
       setSchemaTypes(project.entitySchema)
@@ -303,7 +407,7 @@ export function GraphEditor({ projectId, onBackToDashboard }: GraphEditorProps) 
 
     const currentProject = getActiveProject(storeRef.current)
     const { project: merged, report } = mergeIntoProject(action.data, currentProject)
-    const normalized = normalizeGraph(merged.graph as any)
+    const normalized = normalizeGraph(merged.graph as any, { showDefault: false })
     setNodes(normalized.nodes)
     setEdges(normalized.edges)
     setSchemaTypes(merged.entitySchema)
@@ -357,6 +461,21 @@ export function GraphEditor({ projectId, onBackToDashboard }: GraphEditorProps) 
     if (!cloudLoadedRef.current) return  // guard only the persistence layer
     autoSave(next)
   }, [nodes, edges, schemaTypes, relTypes, conceptSchema, assets, canvasImages, rootNodeId, projectName]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  // ── Diagnostics snapshot — observational only, no behavior change ────
+  useEffect(() => {
+    updateDiagnosticsSnapshot({
+      projectId,
+      projectName,
+      nodes: nodes as unknown[],
+      edges: edges as unknown[],
+      entitySchemaCount: schemaTypes.length,
+      relSchemaCount: relTypes.length,
+      conceptSchemaCount: conceptSchema.length,
+      assetCount: assets.length,
+      canvasImageCount: canvasImages.length,
+    })
+  }, [projectId, projectName, nodes, edges, schemaTypes, relTypes, conceptSchema, assets, canvasImages])
 
   // ── Sync project name to cloud on change ──────────────────────────────
   const initialNameRef = useRef(projectName)

@@ -9,6 +9,7 @@ import { SharedProjectViewer } from './SharedProjectViewer'
 import { useLocalDataMigration } from './hooks/useLocalDataMigration'
 import { AudioProvider } from './AudioContext'
 import { MiniPlayer } from './MiniPlayer'
+import { DiagnosticsPanel } from './DiagnosticsPanel'
 
 type View =
   | { kind: 'login' }
@@ -80,6 +81,7 @@ export default function App() {
       <AuthProvider>
         <AppInner />
         <MiniPlayer />
+        <DiagnosticsPanel />
       </AuthProvider>
     </AudioProvider>
   )

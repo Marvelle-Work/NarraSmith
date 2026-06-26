@@ -10,6 +10,9 @@ import { ExportModal } from './ExportModal'
 import { ProjectTemplateModal } from './ProjectTemplateModal'
 import type { ProjectTemplate } from './templates'
 import * as api from './api/projects'
+import { logger } from './lib/logger'
+import { resetPipeline, startStage, completeStage, addMismatchAlerts } from './lib/diagnostics'
+import { Trace, detectMismatches } from './lib/trace'
 
 type Props = {
   onOpenProject: (projectId: string) => void
@@ -43,14 +46,94 @@ export function ProjectDashboard({ onOpenProject }: Props) {
   }
 
   const handleTemplateSelect = async (template: ProjectTemplate) => {
+    const trace = new Trace('CREATE_FROM_TEMPLATE').activate()
+    resetPipeline()
+
+    startStage('Template')
+    trace.logStage('info', 'TEMPLATE_LOAD', 'Template selected', { templateId: template.id })
+    completeStage('Template', 'ok', {
+      meta: { templateId: template.id, name: template.name, nodeCount: template.graph.nodes.length },
+    })
+    trace.snapshot('TEMPLATE_LOAD', {
+      templateId: template.id,
+      nodeCount: template.graph.nodes.length,
+      edgeCount: (template.graph.edges as any[] | undefined)?.length ?? 0,
+      entitySchemaCount: (template as any).entitySchema?.length ?? 0,
+      relSchemaCount: (template as any).relSchema?.length ?? 0,
+      conceptSchemaCount: (template as any).conceptSchema?.length ?? 0,
+      assetCount: (template as any).assets?.length ?? 0,
+    })
+
     setBusy(true)
     try {
       const meta = await api.createProject(template.name)
+      trace.info('API', 'Cloud project created', { cloudId: meta.id, name: template.name })
+
+      startStage('World', template.graph.nodes.length)
       const store = createProjectFromTemplate(
         { version: 1, activeProjectId: '', projects: {} },
         template,
       )
-      const projectData = Object.values(store.projects)[0]
+      const projectData = getActiveProject(store)
+
+      logger.assert(
+        projectData.graph.nodes.length > 0 || template.graph.nodes.length === 0,
+        'WORLD',
+        'createProjectFromTemplate produced 0 nodes from a non-empty template',
+        { templateNodeCount: template.graph.nodes.length },
+      )
+
+      const worldAlerts = detectMismatches('WORLD_BUILD', {
+        templateNodeCount: template.graph.nodes.length,
+        currentNodeCount: projectData.graph.nodes.length,
+        templateEntitySchemaCount: (template as any).entitySchema?.length ?? 0,
+        currentEntitySchemaCount: projectData.entitySchema.length,
+        templateRelSchemaIds: ((template as any).relSchema ?? []).map((s: any) => s.id).filter(Boolean),
+        currentRelSchemaIds: projectData.relSchema.map((s: any) => s.id).filter(Boolean),
+      }, trace.id)
+
+      completeStage('World',
+        worldAlerts.some(a => a.severity === 'error') ? 'error'
+          : worldAlerts.length > 0 ? 'warn' : 'ok',
+        {
+          meta: {
+            entities: (projectData.graph.nodes as any[]).filter(n => n.type === 'circle').length,
+            schemas: projectData.entitySchema.length,
+          },
+          nodeCountAfter: projectData.graph.nodes.length,
+          alerts: worldAlerts,
+        },
+      )
+      addMismatchAlerts(worldAlerts)
+
+      trace.logStage('debug', 'WORLD_BUILD', 'World built from template', {
+        worldId: projectData.id,
+        nodeCount: projectData.graph.nodes.length,
+        schemaCounts: {
+          entity: projectData.entitySchema.length,
+          rel: projectData.relSchema.length,
+          concept: projectData.conceptSchema.length,
+        },
+      })
+      trace.snapshot('WORLD_BUILD', {
+        nodeCount: projectData.graph.nodes.length,
+        edgeCount: (projectData.graph.edges as any[])?.length ?? 0,
+        entitySchemaCount: projectData.entitySchema.length,
+        relSchemaCount: projectData.relSchema.length,
+        conceptSchemaCount: projectData.conceptSchema.length,
+        assetCount: (projectData.assets ?? []).length,
+        notes: `localId=${projectData.id} | cloudId=${meta.id}`,
+      })
+
+      // The local store doesn't have cloudId yet — flag it before sync
+      const storeAlerts = detectMismatches('STORE_INIT', {
+        cloudId: meta.id,
+        storeHasCloudId: !!loadProjectStore().projects[meta.id],
+      }, trace.id)
+      addMismatchAlerts(storeAlerts)
+
+      startStage('Store')
+      logger.time('SYNC_TEMPLATE')
       await api.syncProjectData(
         meta.id,
         {
@@ -63,12 +146,40 @@ export function ProjectDashboard({ onOpenProject }: Props) {
         },
         0,
       )
+      logger.timeEnd('SYNC_TEMPLATE')
+
+      completeStage('Store',
+        storeAlerts.some(a => a.severity === 'error') ? 'error'
+          : storeAlerts.length > 0 ? 'warn' : 'ok',
+        { meta: { cloudId: meta.id }, alerts: storeAlerts },
+      )
+
+      trace.logStage('info', 'CLOUD_SYNC', 'Template synced to cloud', { cloudId: meta.id })
+      trace.snapshot('CLOUD_SYNC', {
+        nodeCount: projectData.graph.nodes.length,
+        edgeCount: (projectData.graph.edges as any[])?.length ?? 0,
+        entitySchemaCount: projectData.entitySchema.length,
+        relSchemaCount: projectData.relSchema.length,
+        conceptSchemaCount: projectData.conceptSchema.length,
+        assetCount: (projectData.assets ?? []).length,
+        notes: `cloudId=${meta.id} synced`,
+      })
+
+      trace.warn('STORE', 'Local store does NOT contain cloudId yet — editor loads from cloud', {
+        localId: projectData.id,
+        cloudId: meta.id,
+      })
+
       setShowTemplates(false)
+      trace.info('UI', 'Navigating to editor', { projectId: meta.id })
       onOpenProject(meta.id)
     } catch (err) {
+      trace.error('TEMPLATE', 'Failed to create project from template', { err: String(err) })
+      completeStage('Template', 'error', { meta: { err: String(err) } })
       console.error('Failed to create project from template:', err)
     } finally {
       setBusy(false)
+      trace.deactivate()
     }
   }
 

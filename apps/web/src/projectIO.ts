@@ -5,6 +5,7 @@ import type { AssetData, AssetEntry, CanvasImage, SizeLevel } from './types'
 import type { ProjectGraph, ProjectData, ProjectStore } from './projectStore'
 import { getActiveProject, saveProjectStore } from './projectStore'
 import { uid } from './schema'
+import { logger } from './lib/logger'
 
 // ═══════════════════════════════════════════════════════════════════════════
 // v2 Format — World / Pages separation
@@ -352,6 +353,7 @@ export type MergeReport = {
 // ═══════════════════════════════════════════════════════════════════════════
 
 export function buildExportPayload(store: ProjectStore, projectId?: string): { json: string; fileName: string } {
+  logger.info('EXPORT', 'Building v2 export payload', { projectId: projectId ?? store.activeProjectId })
   const project = projectId ? store.projects[projectId] ?? getActiveProject(store) : getActiveProject(store)
   const allNodes = project.graph.nodes as any[]
   const allEdges = project.graph.edges as any[]
@@ -439,10 +441,15 @@ export function buildExportPayload(store: ProjectStore, projectId?: string): { j
   }
 
   const slug = project.name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '')
-  return {
-    json: JSON.stringify(payload, null, 2),
-    fileName: `${slug || 'project'}.narrasmith.json`,
-  }
+  const json = JSON.stringify(payload, null, 2)
+  logger.debug('EXPORT', 'Export payload built', {
+    entities: entities.length,
+    relationships: relationships.length,
+    assets: worldAssets.length,
+    entitySchemas: project.entitySchema.length,
+    bytes: json.length,
+  })
+  return { json, fileName: `${slug || 'project'}.narrasmith.json` }
 }
 
 export function downloadExportJson(json: string, fileName: string): void {
@@ -602,7 +609,9 @@ export function importProject(data: NarrasmithExportV2 | NarrasmithExport, store
 function importProjectV2(data: NarrasmithExportV2, store: ProjectStore): ProjectStore {
   const newId = `project-${uid()}`
   const now = new Date().toISOString()
+  logger.time('IMPORT_V2_BUILD_GRAPH')
   const { graph, assets, canvasImages } = buildGraphFromV2(data)
+  logger.timeEnd('IMPORT_V2_BUILD_GRAPH')
 
   const project: ProjectData = {
     id: newId,
@@ -617,6 +626,14 @@ function importProjectV2(data: NarrasmithExportV2, store: ProjectStore): Project
     canvasImages,
   }
 
+  logger.info('IMPORT', 'v2 project imported', {
+    newId,
+    name: project.name,
+    nodeCount: graph.nodes.length,
+    edgeCount: graph.edges.length,
+    entitySchemas: data.world.entitySchemas.length,
+    assets: assets.length,
+  })
   const next: ProjectStore = {
     ...store,
     activeProjectId: newId,
@@ -636,7 +653,7 @@ function importProjectV1(data: NarrasmithExport, store: ProjectStore): ProjectSt
   if (assets.length === 0) {
     const assetNodes = (data.graph?.nodes as any[] ?? []).filter((n: any) => n.type === 'asset')
     if (assetNodes.length > 0) {
-      console.warn(`[Narrasmith] v1 import: reconstructing ${assetNodes.length} asset(s) from graph nodes — entries will be empty.`)
+      logger.warn('IMPORT', `v1 import: reconstructing ${assetNodes.length} asset(s) from graph nodes — entries will be empty`)
       assets = assetNodes.map((n: any) => ({
         id: n.data?.assetId ?? n.id.replace('asset-node-', ''),
         title: n.data?.title ?? 'Untitled Asset',

@@ -2,6 +2,7 @@ import { useRef, useCallback, useEffect } from 'react'
 import { syncProjectData } from '../api/projects'
 import { saveProjectStore } from '../projectStore'
 import type { ProjectData, ProjectStore } from '../projectStore'
+import { logger } from '../lib/logger'
 
 export function useAutoSave(projectId: string, delay = 2000) {
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
@@ -39,8 +40,9 @@ export function useAutoSave(projectId: string, delay = 2000) {
           versionRef.current,
         )
         versionRef.current = version
+        logger.debug('SYNC', 'Cloud sync completed', { projectId, version })
       } catch (err) {
-        console.warn('Cloud sync failed, data preserved in localStorage:', err)
+        logger.warn('SYNC', 'Cloud sync failed — data preserved in localStorage', { err: String(err) })
       } finally {
         savingRef.current = false
       }
