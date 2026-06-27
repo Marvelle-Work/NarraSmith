@@ -182,8 +182,12 @@ function applyDirectionMarkers(edge: Edge): Edge {
   const styleStroke  = (edge.style as React.CSSProperties | undefined)?.stroke as string | undefined
   const color = manualColor ?? schemaColor ?? styleStroke ?? '#a1a1aa'
   const marker: EdgeMarker = { type: MarkerType.ArrowClosed, color, width: 20, height: 20 }
-  next.markerEnd = marker
-  if (direction === 'bidirectional') next.markerStart = marker
+  if (direction === 'directed-reversed') {
+    next.markerStart = marker
+  } else {
+    next.markerEnd = marker
+    if (direction === 'bidirectional') next.markerStart = marker
+  }
   return next
 }
 
@@ -1651,6 +1655,15 @@ function StoryEntityPanel({ node, schemaTypes, conceptSchemas, resolvedFields, r
         </div>
       </PanelField>
 
+      <PanelField label="Description">
+        <textarea
+          value={node.data.description ?? ''}
+          onChange={e => onUpdate({ description: e.target.value })}
+          rows={4} placeholder="Who or what is this? What role do they play?"
+          style={{ ...inputStyle, resize: 'vertical' }}
+        />
+      </PanelField>
+
       <PanelField label="Importance">
         <EmphasisPicker value={node.data.sizeLevel ?? 3} onChange={v => onUpdate({ sizeLevel: v })} showHint />
       </PanelField>
@@ -1663,17 +1676,10 @@ function StoryEntityPanel({ node, schemaTypes, conceptSchemas, resolvedFields, r
         <AppearanceField
           value={node.data.profileImageUrl}
           onChange={url => onUpdate({ profileImageUrl: url || undefined })}
+          color={node.data.color}
+          onChangeColor={color => onUpdate({ color: color || undefined })}
           labelColor={node.data.labelColor}
           onChangeLabelColor={color => onUpdate({ labelColor: color || undefined })}
-        />
-      </PanelField>
-
-      <PanelField label="Description">
-        <textarea
-          value={node.data.description ?? ''}
-          onChange={e => onUpdate({ description: e.target.value })}
-          rows={4} placeholder="Who or what is this? What role do they play?"
-          style={{ ...inputStyle, resize: 'vertical' }}
         />
       </PanelField>
 
@@ -1803,6 +1809,19 @@ function SystemEntityPanel({ node, schemaTypes, conceptSchemas, resolvedFields, 
         </div>
       </PanelField>
 
+      <PanelField label="Description">
+        <textarea
+          value={node.data.description ?? ''}
+          onChange={e => onUpdate({ description: e.target.value })}
+          rows={4}
+          style={{ ...inputStyle, resize: 'vertical' }}
+        />
+      </PanelField>
+
+      <PanelField label="Emphasis">
+        <EmphasisPicker value={node.data.sizeLevel ?? 3} onChange={v => onUpdate({ sizeLevel: v })} />
+      </PanelField>
+
       <PanelField label="Color">
         <ColorPicker value={node.data.color} onChange={color => onUpdate({ color: color || undefined })} />
       </PanelField>
@@ -1811,13 +1830,11 @@ function SystemEntityPanel({ node, schemaTypes, conceptSchemas, resolvedFields, 
         <AppearanceField
           value={node.data.profileImageUrl}
           onChange={url => onUpdate({ profileImageUrl: url || undefined })}
+          color={node.data.color}
+          onChangeColor={color => onUpdate({ color: color || undefined })}
           labelColor={node.data.labelColor}
           onChangeLabelColor={color => onUpdate({ labelColor: color || undefined })}
         />
-      </PanelField>
-
-      <PanelField label="Emphasis">
-        <EmphasisPicker value={node.data.sizeLevel ?? 3} onChange={v => onUpdate({ sizeLevel: v })} />
       </PanelField>
 
       {resolvedFields.length > 0 && (
@@ -1871,15 +1888,6 @@ function SystemEntityPanel({ node, schemaTypes, conceptSchemas, resolvedFields, 
           </div>
         </PanelField>
       )}
-
-      <PanelField label="Description">
-        <textarea
-          value={node.data.description ?? ''}
-          onChange={e => onUpdate({ description: e.target.value })}
-          rows={4}
-          style={{ ...inputStyle, resize: 'vertical' }}
-        />
-      </PanelField>
 
       {visibleConceptIds.length > 0 && (
         <PanelField label="Concepts">
@@ -2250,10 +2258,12 @@ function ConnectionsList({ relationships }: { relationships: RelationshipList })
 }
 
 function AppearanceField({
-  value, onChange, labelColor, onChangeLabelColor,
+  value, onChange, color, onChangeColor, labelColor, onChangeLabelColor,
 }: {
   value?: string
   onChange: (url: string) => void
+  color?: string
+  onChangeColor: (color: string) => void
   labelColor?: string
   onChangeLabelColor: (color: string) => void
 }) {
@@ -2270,7 +2280,11 @@ function AppearanceField({
         <span style={{ fontSize: 11, fontWeight: 600, color: '#71717a' }}>Profile Image URL</span>
         <input
           value={value ?? ''}
-          onChange={e => onChange(e.target.value)}
+          onChange={e => {
+            const url = e.target.value
+            onChange(url)
+            if (url && !color) onChangeColor('#ffffff')
+          }}
           placeholder="https://…"
           style={inputStyle}
         />
@@ -2306,9 +2320,10 @@ function AppearanceField({
 
 function DirectionControl({ direction, onChange }: { direction: RelationshipDirection; onChange: (d: RelationshipDirection) => void }) {
   const opts: { value: RelationshipDirection; label: string; title: string }[] = [
-    { value: 'undirected',    label: '—',  title: 'Undirected' },
-    { value: 'directed',      label: '→',  title: 'Directed (A → B)' },
-    { value: 'bidirectional', label: '⇄', title: 'Bidirectional (A ⇄ B)' },
+    { value: 'undirected',        label: '—',  title: 'Undirected' },
+    { value: 'directed',          label: '→',  title: 'Directed (A → B)' },
+    { value: 'directed-reversed', label: '←',  title: 'Directed (B → A)' },
+    { value: 'bidirectional',     label: '⇄', title: 'Bidirectional (A ⇄ B)' },
   ]
   return (
     <div style={{ display: 'flex', gap: 4 }}>

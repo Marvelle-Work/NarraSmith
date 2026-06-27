@@ -272,9 +272,10 @@ function EditorField({ label, children }: { label: string; children: React.React
 
 function SchemaDirectionControl({ direction, onChange }: { direction: RelationshipDirection; onChange: (d: RelationshipDirection) => void }) {
   const opts: { value: RelationshipDirection; label: string; title: string }[] = [
-    { value: 'undirected',    label: '—',  title: 'No default (undirected)' },
-    { value: 'directed',      label: '→',  title: 'Directed (A → B)' },
-    { value: 'bidirectional', label: '⇄', title: 'Bidirectional (A ⇄ B)' },
+    { value: 'undirected',        label: '—',  title: 'No default (undirected)' },
+    { value: 'directed',          label: '→',  title: 'Directed (A → B)' },
+    { value: 'directed-reversed', label: '←',  title: 'Directed (B → A)' },
+    { value: 'bidirectional',     label: '⇄', title: 'Bidirectional (A ⇄ B)' },
   ]
   return (
     <div style={{ display: 'flex', gap: 4 }}>

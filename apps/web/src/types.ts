@@ -41,7 +41,7 @@ export type NodeData = {
 
 export type GraphNode = Node<NodeData>
 
-export type RelationshipDirection = 'undirected' | 'directed' | 'bidirectional'
+export type RelationshipDirection = 'undirected' | 'directed' | 'directed-reversed' | 'bidirectional'
 
 export type EdgeData = {
   labelT?: number
