@@ -1,5 +1,6 @@
 import { apiFetch, API_BASE } from './client'
 import type { ProjectData } from '../projectStore'
+import type { CanonicalProjectState } from '../lib/canonicalState'
 
 export type ProjectMeta = {
   id: string
@@ -63,6 +64,17 @@ export async function syncProjectData(
   return apiFetch<{ version: number }>(`/projects/${id}/sync`, {
     method: 'PUT',
     body: JSON.stringify({ ...data, version }),
+  })
+}
+
+export async function saveCanonicalState(
+  id: string,
+  state: CanonicalProjectState,
+  version: number,
+): Promise<{ version: number }> {
+  return apiFetch<{ version: number }>(`/projects/${id}/canonical`, {
+    method: 'PUT',
+    body: JSON.stringify({ state, version }),
   })
 }
 

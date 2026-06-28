@@ -42,9 +42,10 @@ import { CanvasImageNode } from './CanvasImageNode'
 import type { Asset, AttachmentAsset, AssetNodeData, CanvasImageAsset, CanvasImageNodeData, NotebookAsset } from './types'
 import { isUrl } from './types'
 import {
-  loadProjectStore, saveProjectStore, getActiveProject, normalizeProjectAssets,
+  loadProjectStore, saveProjectStore, getActiveProject,
   type ProjectStore, type ProjectData,
 } from './projectStore'
+import { hydrateFromCanonical } from './lib/canonicalState'
 import {
   buildExportPayload, downloadExportJson, importProject, mergeIntoProject,
 } from './projectIO'
@@ -315,9 +316,10 @@ export function GraphEditor({ projectId, onBackToDashboard }: GraphEditorProps) 
             cloudEntitySchemas: cloudData.entitySchema?.length ?? 0,
           })
 
-          // Normalize assets from cloud (may be pre-v2 format without `kind`, or have
-          // old separate canvasImages field) before applying to state or persisting.
-          const cloudAssets = normalizeProjectAssets(cloudData)
+          // Hydrate cloud data through the canonical layer.
+          // Handles pre-v2 formats (no `kind`, legacy canvasImages field) uniformly.
+          const hydratedProject = hydrateFromCanonical(cloudData)
+          const cloudAssets = hydratedProject.assets
           const cloudNotebooks = cloudAssets.filter(a => a.kind === 'notebook')
           logger.info('NOTEBOOK', 'Cloud hydration — notebook trace', {
             rawAssetCount: (cloudData.assets as unknown[] | undefined)?.length ?? 0,
@@ -326,19 +328,16 @@ export function GraphEditor({ projectId, onBackToDashboard }: GraphEditorProps) 
             notebookIds: cloudNotebooks.map(a => a.id),
           })
 
-          const normalizedCloudProject = { ...cloudData, assets: cloudAssets }
-          delete (normalizedCloudProject as any).canvasImages
-
           const normalized = normalizeGraph(cloudData.graph as any, { showDefault: false })
           setNodes(normalized.nodes)
           setEdges(normalized.edges)
-          setSchemaTypes(cloudData.entitySchema)
-          setRelTypes(cloudData.relSchema)
-          setConceptSchema(cloudData.conceptSchema ?? [])
+          setSchemaTypes(hydratedProject.entitySchema)
+          setRelTypes(hydratedProject.relSchema)
+          setConceptSchema(hydratedProject.conceptSchema ?? [])
           setAssets(cloudAssets)
-          setProjectName(cloudData.name)
+          setProjectName(hydratedProject.name)
           setRootNodeId((cloudData.graph as any).rootNodeId ?? null)
-          storeRef.current.projects[projectId] = normalizedCloudProject
+          storeRef.current.projects[projectId] = hydratedProject
           saveProjectStore(storeRef.current)
 
           const graphAlerts = detectMismatches('GRAPH_HYDRATE', {
