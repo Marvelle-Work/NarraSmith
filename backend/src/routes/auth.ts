@@ -40,6 +40,10 @@ export default async function authRoutes(app: FastifyInstance) {
   // Expected response: { ok: true, hookSecretConfigured: true/false, ... }
   app.get('/auth/email-hook', async (_req, reply) => {
     const secret = env.EMAIL_HOOK_SECRET
+    console.log('[EMAIL_HOOK_PROBE] GET hit — Railway backend is serving this route', {
+      supabaseProject: env.SUPABASE_URL,
+      hookSecretConfigured: !!secret,
+    })
     return reply.send({
       ok: true,
       hookSecretConfigured: !!secret,
@@ -56,8 +60,8 @@ export default async function authRoutes(app: FastifyInstance) {
   // Configure: Supabase Dashboard → Authentication → Hooks → Send Email
   // URL: {BACKEND_URL}/auth/email-hook   Secret: EMAIL_HOOK_SECRET env var value
   app.post('/auth/email-hook', async (req, reply) => {
-    // ── HARD LOG — first thing, before anything else ──────────────────────
-    // If this line never appears in Railway logs, Supabase is NOT calling us.
+    // Absolute first line — no conditions, no logic, no destructuring
+    console.log('🔥 EMAIL HOOK HIT')
     console.log('[EMAIL_HOOK] 🔥 HIT', {
       time: new Date().toISOString(),
       hasAuth: !!req.headers['authorization'],
