@@ -41,14 +41,37 @@ export default async function authRoutes(app: FastifyInstance) {
   // Set the hook URL to: {BACKEND_URL}/auth/email-hook
   // Set the hook secret to: EMAIL_HOOK_SECRET (same value as your env var)
   app.post('/auth/email-hook', async (req, reply) => {
+    // ── DIAGNOSTIC: hard log BEFORE any auth check ───────────────────────
+    // If this log never appears, Supabase is NOT calling this endpoint.
+    // Check: Dashboard → Authentication → Hooks → Send Email
+    req.log.warn({
+      url: req.url,
+      method: req.method,
+      hasAuthHeader: !!req.headers['authorization'],
+      authHeaderPrefix: ((req.headers['authorization'] as string | undefined) ?? '').slice(0, 20) || '(none)',
+      bodyKeys: Object.keys((req.body as Record<string, unknown>) ?? {}),
+    }, '[EMAIL_HOOK] 🔥 HIT — Supabase called the email hook')
+    // ─────────────────────────────────────────────────────────────────────
+
     const hookSecret = env.EMAIL_HOOK_SECRET
     if (hookSecret) {
       const authHeader = (req.headers['authorization'] as string | undefined) ?? ''
-      if (authHeader !== `Bearer ${hookSecret}`) {
+      const authorized = authHeader === `Bearer ${hookSecret}`
+      req.log.warn({
+        authorized,
+        secretLength: hookSecret.length,
+        receivedPrefix: authHeader.slice(0, 20) || '(none)',
+      }, authorized
+        ? '[EMAIL_HOOK] Auth check PASSED'
+        : '[EMAIL_HOOK] ❌ Auth check FAILED — secret mismatch. Supabase Dashboard secret does not match EMAIL_HOOK_SECRET env var.'
+      )
+      if (!authorized) {
+        // Returning 401 causes Supabase to fall back to internal email → rate limits.
+        // If you see this log, fix the hook secret in the Supabase Dashboard.
         return reply.code(401).send({ error: 'Unauthorized' })
       }
     } else {
-      req.log.warn('EMAIL_HOOK_SECRET is not set — hook is unauthenticated (set it in production)')
+      req.log.warn('[EMAIL_HOOK] EMAIL_HOOK_SECRET is not set — accepting unauthenticated hook calls (set in production)')
     }
 
     const body = req.body as {
@@ -63,9 +86,16 @@ export default async function authRoutes(app: FastifyInstance) {
     const userEmail = body?.user?.email
     const emailData = body?.email_data
 
+    req.log.info({
+      userEmail,
+      verificationType: emailData?.verification_type,
+      hasTokenHash: !!emailData?.token_hash,
+      redirectTo: emailData?.redirect_to,
+    }, '[EMAIL_HOOK] Payload parsed')
+
     if (!userEmail || !emailData?.token_hash || !emailData.verification_type) {
-      req.log.warn({ body }, 'email-hook: unexpected payload — skipping send')
-      // Always return 200 to Supabase; non-2xx blocks the auth operation
+      req.log.error({ body }, '[EMAIL_HOOK] ❌ Unexpected payload shape — returning 200 to avoid blocking auth, but NOT sending email')
+      // Always return 200 to Supabase; non-2xx blocks the auth operation entirely
       return reply.code(200).send({})
     }
 
@@ -77,9 +107,13 @@ export default async function authRoutes(app: FastifyInstance) {
     const type = emailData.verification_type as VerificationType
     const { subject, html } = emailContent(type, verifyUrl.toString())
 
+    req.log.info({ to: userEmail, subject, type }, '[EMAIL_HOOK] Sending via Resend')
+
     const { error } = await resend.emails.send({ from: env.RESEND_FROM, to: [userEmail], subject, html })
     if (error) {
-      req.log.error({ error, email: userEmail }, 'email-hook: Resend send failed')
+      req.log.error({ error, email: userEmail }, '[EMAIL_HOOK] ❌ Resend send failed')
+    } else {
+      req.log.info({ email: userEmail, type }, '[EMAIL_HOOK] ✅ Resend send succeeded')
     }
 
     // Must return 200 + empty JSON for Supabase to treat the hook as successful
