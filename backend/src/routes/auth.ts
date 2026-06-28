@@ -35,88 +35,105 @@ function emailContent(type: VerificationType, actionUrl: string): { subject: str
 }
 
 export default async function authRoutes(app: FastifyInstance) {
+  // ── Diagnostic GET — hit this from a browser to confirm the route is live ──
+  // URL: GET https://narrasmithbackend-production.up.railway.app/auth/email-hook
+  // Expected response: { ok: true, hookSecretConfigured: true/false, ... }
+  app.get('/auth/email-hook', async (_req, reply) => {
+    const secret = env.EMAIL_HOOK_SECRET
+    return reply.send({
+      ok: true,
+      hookSecretConfigured: !!secret,
+      hookSecretLength: secret.length,
+      hookSecretPrefix: secret ? secret.slice(0, 8) + '...' : '(not set)',
+      supabaseProject: env.SUPABASE_URL,
+      resendConfigured: !!env.RESEND_API_KEY,
+      ts: new Date().toISOString(),
+    })
+  })
+
   // ── Supabase "Send Email" hook ──────────────────────────────────────────
   // Supabase calls this instead of sending emails itself.
   // Configure: Supabase Dashboard → Authentication → Hooks → Send Email
-  // Set the hook URL to: {BACKEND_URL}/auth/email-hook
-  // Set the hook secret to: EMAIL_HOOK_SECRET (same value as your env var)
+  // URL: {BACKEND_URL}/auth/email-hook   Secret: EMAIL_HOOK_SECRET env var value
   app.post('/auth/email-hook', async (req, reply) => {
-    // ── DIAGNOSTIC: hard log BEFORE any auth check ───────────────────────
-    // If this log never appears, Supabase is NOT calling this endpoint.
-    // Check: Dashboard → Authentication → Hooks → Send Email
-    req.log.warn({
-      url: req.url,
-      method: req.method,
-      hasAuthHeader: !!req.headers['authorization'],
-      authHeaderPrefix: ((req.headers['authorization'] as string | undefined) ?? '').slice(0, 20) || '(none)',
+    // ── HARD LOG — first thing, before anything else ──────────────────────
+    // If this line never appears in Railway logs, Supabase is NOT calling us.
+    console.log('[EMAIL_HOOK] 🔥 HIT', {
+      time: new Date().toISOString(),
+      hasAuth: !!req.headers['authorization'],
+      authPrefix: ((req.headers['authorization'] as string | undefined) ?? '').slice(0, 24) || '(none)',
       bodyKeys: Object.keys((req.body as Record<string, unknown>) ?? {}),
-    }, '[EMAIL_HOOK] 🔥 HIT — Supabase called the email hook')
+    })
     // ─────────────────────────────────────────────────────────────────────
 
-    const hookSecret = env.EMAIL_HOOK_SECRET
-    if (hookSecret) {
-      const authHeader = (req.headers['authorization'] as string | undefined) ?? ''
-      const authorized = authHeader === `Bearer ${hookSecret}`
-      req.log.warn({
-        authorized,
-        secretLength: hookSecret.length,
-        receivedPrefix: authHeader.slice(0, 20) || '(none)',
-      }, authorized
-        ? '[EMAIL_HOOK] Auth check PASSED'
-        : '[EMAIL_HOOK] ❌ Auth check FAILED — secret mismatch. Supabase Dashboard secret does not match EMAIL_HOOK_SECRET env var.'
-      )
-      if (!authorized) {
-        // Returning 401 causes Supabase to fall back to internal email → rate limits.
-        // If you see this log, fix the hook secret in the Supabase Dashboard.
-        return reply.code(401).send({ error: 'Unauthorized' })
+    try {
+      const hookSecret = env.EMAIL_HOOK_SECRET
+
+      // Auth check
+      if (hookSecret) {
+        const authHeader = (req.headers['authorization'] as string | undefined) ?? ''
+        const authorized = authHeader === `Bearer ${hookSecret}`
+        console.log('[EMAIL_HOOK] Auth check:', authorized ? '✅ PASSED' : '❌ FAILED — secret mismatch', {
+          secretLength: hookSecret.length,
+          receivedPrefix: authHeader.slice(0, 24) || '(none)',
+          expectedPrefix: `Bearer ${hookSecret}`.slice(0, 24),
+        })
+        if (!authorized) {
+          // 401 → Supabase falls back to internal email → rate limits.
+          // Fix: make sure Supabase Dashboard "Hook Secret" matches EMAIL_HOOK_SECRET env var on Railway.
+          return reply.code(401).send({ error: 'Unauthorized' })
+        }
+      } else {
+        console.log('[EMAIL_HOOK] ⚠️ EMAIL_HOOK_SECRET not set — accepting unauthenticated (set in Railway for production)')
       }
-    } else {
-      req.log.warn('[EMAIL_HOOK] EMAIL_HOOK_SECRET is not set — accepting unauthenticated hook calls (set in production)')
-    }
 
-    const body = req.body as {
-      user?: { email?: string }
-      email_data?: {
-        token_hash?: string
-        redirect_to?: string
-        verification_type?: string
+      const body = req.body as {
+        user?: { email?: string }
+        email_data?: {
+          token_hash?: string
+          redirect_to?: string
+          verification_type?: string
+        }
       }
+
+      const userEmail = body?.user?.email
+      const emailData = body?.email_data
+
+      console.log('[EMAIL_HOOK] Payload:', {
+        userEmail,
+        verificationType: emailData?.verification_type,
+        hasTokenHash: !!emailData?.token_hash,
+      })
+
+      if (!userEmail || !emailData?.token_hash || !emailData.verification_type) {
+        console.log('[EMAIL_HOOK] ❌ Unexpected payload shape — skipping send but returning 200')
+        return reply.code(200).send({})
+      }
+
+      const verifyUrl = new URL(`${env.SUPABASE_URL}/auth/v1/verify`)
+      verifyUrl.searchParams.set('token_hash', emailData.token_hash)
+      verifyUrl.searchParams.set('type', emailData.verification_type)
+      verifyUrl.searchParams.set('redirect_to', emailData.redirect_to || env.FRONTEND_URL)
+
+      const type = emailData.verification_type as VerificationType
+      const { subject, html } = emailContent(type, verifyUrl.toString())
+
+      console.log('[EMAIL_HOOK] Sending via Resend:', { to: userEmail, subject, type })
+
+      const { error } = await resend.emails.send({ from: env.RESEND_FROM, to: [userEmail], subject, html })
+      if (error) {
+        console.log('[EMAIL_HOOK] ❌ Resend failed:', error)
+      } else {
+        console.log('[EMAIL_HOOK] ✅ Resend succeeded:', { to: userEmail, type })
+      }
+
+    } catch (err) {
+      // Never let an exception cause a non-200 response — that would make
+      // Supabase fall back to its internal email sender and trigger rate limits.
+      console.log('[EMAIL_HOOK] ❌ Unexpected exception (returning 200 anyway):', err)
     }
 
-    const userEmail = body?.user?.email
-    const emailData = body?.email_data
-
-    req.log.info({
-      userEmail,
-      verificationType: emailData?.verification_type,
-      hasTokenHash: !!emailData?.token_hash,
-      redirectTo: emailData?.redirect_to,
-    }, '[EMAIL_HOOK] Payload parsed')
-
-    if (!userEmail || !emailData?.token_hash || !emailData.verification_type) {
-      req.log.error({ body }, '[EMAIL_HOOK] ❌ Unexpected payload shape — returning 200 to avoid blocking auth, but NOT sending email')
-      // Always return 200 to Supabase; non-2xx blocks the auth operation entirely
-      return reply.code(200).send({})
-    }
-
-    const verifyUrl = new URL(`${env.SUPABASE_URL}/auth/v1/verify`)
-    verifyUrl.searchParams.set('token_hash', emailData.token_hash)
-    verifyUrl.searchParams.set('type', emailData.verification_type)
-    verifyUrl.searchParams.set('redirect_to', emailData.redirect_to || env.FRONTEND_URL)
-
-    const type = emailData.verification_type as VerificationType
-    const { subject, html } = emailContent(type, verifyUrl.toString())
-
-    req.log.info({ to: userEmail, subject, type }, '[EMAIL_HOOK] Sending via Resend')
-
-    const { error } = await resend.emails.send({ from: env.RESEND_FROM, to: [userEmail], subject, html })
-    if (error) {
-      req.log.error({ error, email: userEmail }, '[EMAIL_HOOK] ❌ Resend send failed')
-    } else {
-      req.log.info({ email: userEmail, type }, '[EMAIL_HOOK] ✅ Resend send succeeded')
-    }
-
-    // Must return 200 + empty JSON for Supabase to treat the hook as successful
+    // Always 200 — non-2xx blocks the auth operation entirely in Supabase
     return reply.code(200).send({})
   })
 
