@@ -47,11 +47,13 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   }, [])
 
   const signUp = async (email: string, password: string) => {
+    console.log('🟢 FRONTEND SIGNUP FIRED', { email, supabaseUrl: supabase['supabaseUrl'] })
     const { error } = await supabase.auth.signUp({
       email,
       password,
       options: { emailRedirectTo: window.location.origin },
     })
+    console.log('🟢 FRONTEND SIGNUP RESULT', { error: error?.message ?? null })
     return { error: error?.message ?? null }
   }
 

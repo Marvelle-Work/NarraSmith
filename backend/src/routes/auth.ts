@@ -122,7 +122,7 @@ export default async function authRoutes(app: FastifyInstance) {
       const type = emailData.verification_type as VerificationType
       const { subject, html } = emailContent(type, verifyUrl.toString())
 
-      console.log('[EMAIL_HOOK] Sending via Resend:', { to: userEmail, subject, type })
+      console.log('📨 RESEND SENDING', { to: userEmail, subject, type })
 
       const { error } = await resend.emails.send({ from: env.RESEND_FROM, to: [userEmail], subject, html })
       if (error) {
