@@ -1,13 +1,13 @@
 import { useState } from 'react'
-import type { AssetData, AssetEntry, AssetEntryType } from './types'
+import type { AttachmentAsset, AssetEntry, AssetEntryType } from './types'
 import { isUrl } from './types'
 import { PlayButton } from './PlayButton'
 
 type Props = {
-  assets: AssetData[]
+  assets: AttachmentAsset[]
   entityId: string
-  onAdd: (asset: AssetData) => void
-  onUpdate: (asset: AssetData) => void
+  onAdd: (asset: AttachmentAsset) => void
+  onUpdate: (asset: AttachmentAsset) => void
   onLink: (assetId: string, entityId: string) => void
   onUnlink: (assetId: string, entityId: string) => void
   onTogglePin: (assetId: string) => void
@@ -61,9 +61,14 @@ export function AssetEditor({ assets, entityId, onAdd, onUpdate, onLink, onUnlin
 
   const handleCreateFromTemplate = (templateIdx: number) => {
     const tmpl = TEMPLATES[templateIdx]
-    const asset: AssetData = {
+    const now = new Date().toISOString()
+    const asset: AttachmentAsset = {
       id: assetId(),
+      kind: 'attachment',
       title: tmpl.label === 'Custom' ? 'Untitled Asset' : tmpl.label,
+      tags: [],
+      createdAt: now,
+      updatedAt: now,
       linkedEntityIds: [entityId],
       isPinnedOnCanvas: true,
       entries: tmpl.entries.map(e => ({ ...e, id: entryId() })),
@@ -73,14 +78,14 @@ export function AssetEditor({ assets, entityId, onAdd, onUpdate, onLink, onUnlin
     setExpandedId(asset.id)
   }
 
-  const addEntry = (asset: AssetData, type: AssetEntryType) => {
+  const addEntry = (asset: AttachmentAsset, type: AssetEntryType) => {
     onUpdate({
       ...asset,
       entries: [...asset.entries, { id: entryId(), type, label: '', value: '', isLinkified: false }],
     })
   }
 
-  const updateEntry = (asset: AssetData, eid: string, updates: Partial<AssetEntry>) => {
+  const updateEntry = (asset: AttachmentAsset, eid: string, updates: Partial<AssetEntry>) => {
     onUpdate({
       ...asset,
       entries: asset.entries.map(e => {
@@ -92,7 +97,7 @@ export function AssetEditor({ assets, entityId, onAdd, onUpdate, onLink, onUnlin
     })
   }
 
-  const removeEntry = (asset: AssetData, eid: string) => {
+  const removeEntry = (asset: AttachmentAsset, eid: string) => {
     onUpdate({ ...asset, entries: asset.entries.filter(e => e.id !== eid) })
   }
 

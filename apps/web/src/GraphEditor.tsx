@@ -39,11 +39,11 @@ import { createCommandExecutor, type CommandRegistry, type CommandId, type Comma
 import { PlayButton } from './PlayButton'
 import { TetherEdge } from './TetherEdge'
 import { CanvasImageNode } from './CanvasImageNode'
-import type { AssetData, AssetNodeData, CanvasImage, CanvasImageNodeData } from './types'
+import type { Asset, AttachmentAsset, AssetNodeData, CanvasImageAsset, CanvasImageNodeData, NotebookAsset } from './types'
 import { isUrl } from './types'
 import {
-  loadProjectStore, saveProjectStore, getActiveProject,
-  type ProjectStore,
+  loadProjectStore, saveProjectStore, getActiveProject, normalizeProjectAssets,
+  type ProjectStore, type ProjectData,
 } from './projectStore'
 import {
   buildExportPayload, downloadExportJson, importProject, mergeIntoProject,
@@ -51,8 +51,10 @@ import {
 import { ImportModal, type ImportAction } from './ImportModal'
 import { ExportModal } from './ExportModal'
 import { useAutoSave } from './hooks/useAutoSave'
+import { useWorldIndex } from './hooks/useWorldIndex'
 import { getProjectData, updateProject } from './api/projects'
 import { logger } from './lib/logger'
+import { NotebookWorkspace } from './NotebookWorkspace'
 import { updateDiagnosticsSnapshot, startStage, completeStage, addMismatchAlerts } from './lib/diagnostics'
 import { Trace, detectMismatches } from './lib/trace'
 
@@ -230,15 +232,27 @@ export function GraphEditor({ projectId, onBackToDashboard }: GraphEditorProps) 
   const [conceptSchema, setConceptSchema] = useState<ConceptSchemaType[]>(
     () => isKnownLocally ? (activeProject.conceptSchema ?? DEFAULT_CONCEPT_SCHEMAS) : DEFAULT_CONCEPT_SCHEMAS,
   )
-  const [assets, setAssets] = useState<AssetData[]>(
+  const [assets, setAssets] = useState<Asset[]>(
     () => isKnownLocally ? (activeProject.assets ?? []) : [],
-  )
-  const [canvasImages, setCanvasImages] = useState<CanvasImage[]>(
-    () => isKnownLocally ? (activeProject.canvasImages ?? []) : [],
   )
   const [rootNodeId, setRootNodeId] = useState<string | null>(
     () => isKnownLocally ? ((activeProject.graph as any).rootNodeId ?? null) : null,
   )
+  const [openNotebookId, setOpenNotebookId] = useState<string | null>(null)
+
+  // Assembled project data for WorldIndex — rebuilt only when underlying data changes
+  const currentProject = useMemo((): ProjectData => ({
+    id: projectId,
+    name: '', // not needed for indexing
+    createdAt: '', updatedAt: '',
+    graph: { nodes: nodes as any, edges: edges as any, rootNodeId: rootNodeId ?? undefined },
+    entitySchema: schemaTypes,
+    relSchema: relTypes,
+    conceptSchema,
+    assets,
+  }), [projectId, nodes, edges, rootNodeId, schemaTypes, relTypes, conceptSchema, assets])
+
+  const worldIndex = useWorldIndex(currentProject)
 
   const [inspectorWidth, setInspectorWidth] = useState<number>(() => {
     const saved = localStorage.getItem('narrasmith.inspector.width')
@@ -301,17 +315,22 @@ export function GraphEditor({ projectId, onBackToDashboard }: GraphEditorProps) 
             cloudEntitySchemas: cloudData.entitySchema?.length ?? 0,
           })
 
+          // Normalize assets from cloud (may be pre-v2 format without `kind`, or have
+          // old separate canvasImages field) before applying to state or persisting.
+          const cloudAssets = normalizeProjectAssets(cloudData)
+          const normalizedCloudProject = { ...cloudData, assets: cloudAssets }
+          delete (normalizedCloudProject as any).canvasImages
+
           const normalized = normalizeGraph(cloudData.graph as any, { showDefault: false })
           setNodes(normalized.nodes)
           setEdges(normalized.edges)
           setSchemaTypes(cloudData.entitySchema)
           setRelTypes(cloudData.relSchema)
           setConceptSchema(cloudData.conceptSchema ?? [])
-          setAssets(cloudData.assets ?? [])
-          setCanvasImages(cloudData.canvasImages ?? [])
+          setAssets(cloudAssets)
           setProjectName(cloudData.name)
           setRootNodeId((cloudData.graph as any).rootNodeId ?? null)
-          storeRef.current.projects[projectId] = cloudData
+          storeRef.current.projects[projectId] = normalizedCloudProject
           saveProjectStore(storeRef.current)
 
           const graphAlerts = detectMismatches('GRAPH_HYDRATE', {
@@ -426,7 +445,6 @@ export function GraphEditor({ projectId, onBackToDashboard }: GraphEditorProps) 
       setRelTypes(project.relSchema)
       setConceptSchema(project.conceptSchema ?? [])
       setAssets(project.assets ?? [])
-      setCanvasImages(project.canvasImages ?? [])
       setProjectName(project.name)
       setRootNodeId((project.graph as any).rootNodeId ?? null)
       setSelectedNodeId(null)
@@ -444,7 +462,6 @@ export function GraphEditor({ projectId, onBackToDashboard }: GraphEditorProps) 
     setRelTypes(merged.relSchema)
     setConceptSchema(merged.conceptSchema ?? [])
     setAssets(merged.assets ?? [])
-    setCanvasImages(merged.canvasImages ?? [])
     setSelectedNodeId(null)
     setSelectedEdgeId(null)
     return report
@@ -455,17 +472,19 @@ export function GraphEditor({ projectId, onBackToDashboard }: GraphEditorProps) 
   // Persistence (localStorage + cloud) is guarded until cloud data has been loaded
   // to prevent overwriting cloud state with stale local data on startup.
   useEffect(() => {
-    // Sync canvas positions back to assets and canvas images before persisting
+    // Sync canvas positions back into the unified asset array before persisting
     const syncedAssets = assets.map(a => {
-      if (!a.isPinnedOnCanvas) return a
-      const canvasNode = nodes.find(n => n.id === `asset-node-${a.id}`)
-      if (!canvasNode) return a
-      return { ...a, position: { x: canvasNode.position.x, y: canvasNode.position.y } }
-    })
-    const syncedCanvasImages = canvasImages.map(ci => {
-      const canvasNode = nodes.find(n => n.id === `canvas-img-${ci.id}`)
-      if (!canvasNode) return ci
-      return { ...ci, x: canvasNode.position.x, y: canvasNode.position.y }
+      if ((a.kind === 'attachment' || a.kind === 'notebook') && a.isPinnedOnCanvas) {
+        const canvasNode = nodes.find(n => n.id === `asset-node-${a.id}`)
+        if (!canvasNode) return a
+        return { ...a, position: { x: canvasNode.position.x, y: canvasNode.position.y } }
+      }
+      if (a.kind === 'canvas-image') {
+        const canvasNode = nodes.find(n => n.id === `canvas-img-${a.id}`)
+        if (!canvasNode) return a
+        return { ...a, position: { x: canvasNode.position.x, y: canvasNode.position.y } }
+      }
+      return a
     })
 
     const current = storeRef.current
@@ -481,7 +500,6 @@ export function GraphEditor({ projectId, onBackToDashboard }: GraphEditorProps) 
           relSchema: relTypes,
           conceptSchema,
           assets: syncedAssets,
-          canvasImages: syncedCanvasImages,
           updatedAt: new Date().toISOString(),
         },
       },
@@ -490,10 +508,11 @@ export function GraphEditor({ projectId, onBackToDashboard }: GraphEditorProps) 
 
     if (!cloudLoadedRef.current) return  // guard only the persistence layer
     autoSave(next)
-  }, [nodes, edges, schemaTypes, relTypes, conceptSchema, assets, canvasImages, rootNodeId, projectName]) // eslint-disable-line react-hooks/exhaustive-deps
+  }, [nodes, edges, schemaTypes, relTypes, conceptSchema, assets, rootNodeId, projectName]) // eslint-disable-line react-hooks/exhaustive-deps
 
   // ── Diagnostics snapshot — observational only, no behavior change ────
   useEffect(() => {
+    const canvasImageCount = assets.filter(a => a.kind === 'canvas-image').length
     updateDiagnosticsSnapshot({
       projectId,
       projectName,
@@ -502,10 +521,10 @@ export function GraphEditor({ projectId, onBackToDashboard }: GraphEditorProps) 
       entitySchemaCount: schemaTypes.length,
       relSchemaCount: relTypes.length,
       conceptSchemaCount: conceptSchema.length,
-      assetCount: assets.length,
-      canvasImageCount: canvasImages.length,
+      assetCount: assets.filter(a => a.kind === 'attachment').length,
+      canvasImageCount,
     })
-  }, [projectId, projectName, nodes, edges, schemaTypes, relTypes, conceptSchema, assets, canvasImages])
+  }, [projectId, projectName, nodes, edges, schemaTypes, relTypes, conceptSchema, assets])
 
   // ── Sync project name to cloud on change ──────────────────────────────
   const initialNameRef = useRef(projectName)
@@ -556,20 +575,54 @@ export function GraphEditor({ projectId, onBackToDashboard }: GraphEditorProps) 
   const selectedCanvasImage = useMemo(() => {
     if (!isCanvasImageNode || !selectedNode) return null
     const ciId = (selectedNode.data as unknown as CanvasImageNodeData).canvasImageId
-    return canvasImages.find(c => c.id === ciId) ?? null
-  }, [isCanvasImageNode, selectedNode, canvasImages])
+    const found = assets.find(a => a.id === ciId)
+    return found?.kind === 'canvas-image' ? found as CanvasImageAsset : null
+  }, [isCanvasImageNode, selectedNode, assets])
 
   const isAssetNode = !isCanvasImageNode && selectedNode?.type === 'asset'
   const selectedAsset = useMemo(() => {
     if (!isAssetNode || !selectedNode) return null
     const assetId = (selectedNode.data as unknown as AssetNodeData).assetId
-    return assets.find(a => a.id === assetId) ?? null
+    const found = assets.find(a => a.id === assetId)
+    return found?.kind === 'attachment' ? found as AttachmentAsset : null
+  }, [isAssetNode, selectedNode, assets])
+
+  const selectedNotebook = useMemo(() => {
+    if (!isAssetNode || !selectedNode) return null
+    const assetId = (selectedNode.data as unknown as AssetNodeData).assetId
+    const found = assets.find(a => a.id === assetId)
+    return found?.kind === 'notebook' ? found as NotebookAsset : null
   }, [isAssetNode, selectedNode, assets])
 
   const resolvedFields = useMemo(
     () => selectedNode?.data.typeId ? resolveFields(selectedNode.data.typeId, schemaTypes) : [],
     [selectedNode, schemaTypes],
   )
+
+  // ── Inspector selection diagnostics ──────────────────────────────────
+  useEffect(() => {
+    if (!selectedNodeId) return
+    const assetsWithKind = assets.filter((a: any) => !!a.kind).length
+    logger.debug('INSPECTOR', 'Selection', {
+      selectedNodeId,
+      nodeFound: !!selectedNode,
+      nodeType: selectedNode?.type ?? null,
+      isCircle: selectedNode?.type === 'circle',
+      isAssetNode,
+      isCanvasImageNode,
+      panel: selectedNode
+        ? (isCanvasImageNode ? 'canvas-image' : isAssetNode ? 'asset' : 'entity')
+        : 'none — node not found in graph',
+      assetResolved: isAssetNode ? !!selectedAsset : undefined,
+      canvasImageResolved: isCanvasImageNode ? !!selectedCanvasImage : undefined,
+      nodeData: selectedNode?.data ?? null,
+      totalNodes: nodes.length,
+      attachmentAssets: attachmentAssets.length,
+      totalAssets: assets.length,
+      assetsWithKind,
+      assetsWithoutKind: assets.length - assetsWithKind,
+    })
+  }, [selectedNodeId, selectedNode]) // eslint-disable-line react-hooks/exhaustive-deps
 
   // ── Entity creation ───────────────────────────────────────────────────
   const createEntityAt = useCallback((position: { x: number; y: number }) => {
@@ -816,8 +869,77 @@ export function GraphEditor({ projectId, onBackToDashboard }: GraphEditorProps) 
     }))
   }, [selectedEdgeId, setEdges])
 
+  // Derived views over the unified asset array
+  const attachmentAssets = useMemo(
+    () => assets.filter((a): a is AttachmentAsset => a.kind === 'attachment'),
+    [assets],
+  )
+
+  // ── Notebook management ───────────────────────────────────────────────
+  const addNotebook = useCallback((notebook: NotebookAsset) => {
+    const pos = notebook.position ?? screenToFlowPosition({ x: window.innerWidth / 2, y: window.innerHeight / 2 })
+    const saved: NotebookAsset = { ...notebook, isPinnedOnCanvas: true, position: pos }
+    setAssets(prev => [...prev, saved])
+    setNodes(nds => [...nds, {
+      id: `asset-node-${notebook.id}`,
+      type: 'asset',
+      position: pos,
+      data: {
+        assetId: notebook.id, kind: 'notebook', title: notebook.title,
+        entryCount: notebook.documents.length,
+        entrySummary: `${notebook.documents.length} document${notebook.documents.length !== 1 ? 's' : ''}`,
+      } satisfies AssetNodeData,
+    } as any])
+    setOpenNotebookId(notebook.id)
+    logger.info('NOTEBOOK', 'NOTEBOOK_CREATE', {
+      notebookId: notebook.id, title: notebook.title, documentCount: notebook.documents.length,
+    })
+  }, [screenToFlowPosition, setNodes])
+
+  const updateNotebook = useCallback((notebook: NotebookAsset) => {
+    setAssets(prev => prev.map(a => a.id === notebook.id ? notebook : a))
+    setNodes(nds => nds.map(n => {
+      if (n.type !== 'asset' || (n.data as unknown as AssetNodeData).assetId !== notebook.id) return n
+      return {
+        ...n, data: {
+          assetId: notebook.id, kind: 'notebook', title: notebook.title,
+          entryCount: notebook.documents.length,
+          entrySummary: `${notebook.documents.length} document${notebook.documents.length !== 1 ? 's' : ''}`,
+        } as any,
+      }
+    }))
+  }, [setNodes])
+
+  const openNotebook = useCallback((id: string) => {
+    setOpenNotebookId(id)
+    const nb = assets.find(a => a.id === id)
+    if (nb?.kind === 'notebook') {
+      logger.info('NOTEBOOK', 'NOTEBOOK_OPEN', {
+        notebookId: id, documentCount: nb.documents.length,
+      })
+    }
+  }, [assets])
+
+  const removeNotebook = useCallback((notebookId: string) => {
+    if (openNotebookId === notebookId) setOpenNotebookId(null)
+    setAssets(prev => prev.filter(a => a.id !== notebookId))
+    setNodes(nds => nds.filter(n => !(n.type === 'asset' && (n.data as unknown as AssetNodeData).assetId === notebookId)))
+    setEdges(eds => eds.filter(e => !e.id.startsWith(`tether-${notebookId}-`)))
+    if (selectedNodeId === `asset-node-${notebookId}`) setSelectedNodeId(null)
+  }, [openNotebookId, setNodes, setEdges, selectedNodeId])
+
+  const onNodeDoubleClick = useCallback((_e: React.MouseEvent, node: GraphNode) => {
+    if (node.type !== 'asset') return
+    const assetId = (node.data as unknown as AssetNodeData).assetId
+    const found = assets.find(a => a.id === assetId)
+    if (found?.kind === 'notebook') {
+      setOpenNotebookId(assetId)
+      logger.info('NOTEBOOK', 'NOTEBOOK_OPEN', { notebookId: assetId, documentCount: (found as NotebookAsset).documents.length })
+    }
+  }, [assets])
+
   // ── Asset management ──────────────────────────────────────────────────
-  const addAsset = useCallback((asset: AssetData) => {
+  const addAsset = useCallback((asset: AttachmentAsset) => {
     const shouldPin = asset.isPinnedOnCanvas
     const pos = shouldPin
       ? (asset.position ?? screenToFlowPosition({ x: window.innerWidth / 2, y: window.innerHeight / 2 }))
@@ -844,7 +966,7 @@ export function GraphEditor({ projectId, onBackToDashboard }: GraphEditorProps) 
     }
   }, [screenToFlowPosition, setNodes, setEdges, nodes])
 
-  const updateAsset = useCallback((asset: AssetData) => {
+  const updateAsset = useCallback((asset: AttachmentAsset) => {
     setAssets(prev => prev.map(a => a.id === asset.id ? asset : a))
     setNodes(nds => nds.map(n => {
       if (n.type !== 'asset' || (n.data as unknown as AssetNodeData).assetId !== asset.id) return n
@@ -862,7 +984,7 @@ export function GraphEditor({ projectId, onBackToDashboard }: GraphEditorProps) 
 
   const toggleAssetPin = useCallback((assetId: string) => {
     setAssets(prev => prev.map(a => {
-      if (a.id !== assetId) return a
+      if (a.id !== assetId || a.kind !== 'attachment') return a
       const nowPinned = !a.isPinnedOnCanvas
       if (nowPinned) {
         const linkedNode = nodes.find(n => a.linkedEntityIds.includes(n.id))
@@ -921,20 +1043,26 @@ export function GraphEditor({ projectId, onBackToDashboard }: GraphEditorProps) 
     setEdges(eds => eds.filter(e => e.id !== `tether-${assetId}-${entityId}`))
   }, [setEdges])
 
-  const createStandaloneAsset = useCallback((asset: AssetData) => {
+  const createStandaloneAsset = useCallback((asset: AttachmentAsset) => {
     addAsset(asset)
     setShowNewAsset(false)
   }, [addAsset])
 
+  const createStandaloneNotebook = useCallback((notebook: NotebookAsset) => {
+    addNotebook(notebook)
+    setShowNewAsset(false)
+  }, [addNotebook])
+
   // ── Canvas image management ──────────────────────────────────────────
   const [showNewCanvasImage, setShowNewCanvasImage] = useState(false)
   const [newCanvasImagePos, setNewCanvasImagePos] = useState<{ x: number; y: number }>({ x: 0, y: 0 })
-  const addCanvasImage = useCallback((ci: CanvasImage) => {
-    setCanvasImages(prev => [...prev, ci])
+
+  const addCanvasImage = useCallback((ci: CanvasImageAsset) => {
+    setAssets(prev => [...prev, ci])
     setNodes(nds => [...nds, {
       id: `canvas-img-${ci.id}`,
       type: 'canvas-image',
-      position: { x: ci.x, y: ci.y },
+      position: ci.position ?? { x: 0, y: 0 },
       draggable: false,
       selectable: true,
       zIndex: ci.zIndex - 1000,
@@ -946,8 +1074,8 @@ export function GraphEditor({ projectId, onBackToDashboard }: GraphEditorProps) 
     } as any])
   }, [setNodes])
 
-  const updateCanvasImage = useCallback((ci: CanvasImage) => {
-    setCanvasImages(prev => prev.map(c => c.id === ci.id ? ci : c))
+  const updateCanvasImage = useCallback((ci: CanvasImageAsset) => {
+    setAssets(prev => prev.map(a => a.id === ci.id ? ci : a))
     setNodes(nds => nds.map(n => {
       if (n.id !== `canvas-img-${ci.id}`) return n
       return {
@@ -962,23 +1090,22 @@ export function GraphEditor({ projectId, onBackToDashboard }: GraphEditorProps) 
   }, [setNodes])
 
   const deleteCanvasImage = useCallback((ciId: string) => {
-    setCanvasImages(prev => prev.filter(c => c.id !== ciId))
+    setAssets(prev => prev.filter(a => a.id !== ciId))
     setNodes(nds => nds.filter(n => n.id !== `canvas-img-${ciId}`))
     if (selectedNodeId === `canvas-img-${ciId}`) setSelectedNodeId(null)
   }, [setNodes, selectedNodeId])
 
   const duplicateCanvasImage = useCallback((ciId: string) => {
-    const orig = canvasImages.find(c => c.id === ciId)
+    const orig = assets.find((a): a is CanvasImageAsset => a.id === ciId && a.kind === 'canvas-image')
     if (!orig) return
-    const dup: CanvasImage = {
+    const dup: CanvasImageAsset = {
       ...orig,
       id: `ci-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
       title: `${orig.title} Copy`,
-      x: orig.x + 50,
-      y: orig.y + 50,
+      position: { x: (orig.position?.x ?? 0) + 50, y: (orig.position?.y ?? 0) + 50 },
     }
     addCanvasImage(dup)
-  }, [canvasImages, addCanvasImage])
+  }, [assets, addCanvasImage])
 
   // ── Command registry ───────────────────────────────────────────────────
   const commandRegistry: CommandRegistry = useMemo(() => ({
@@ -998,13 +1125,13 @@ export function GraphEditor({ projectId, onBackToDashboard }: GraphEditorProps) 
     'canvas-image.delete': ({ id }) => deleteCanvasImage(id),
     'canvas-image.duplicate': ({ id }) => duplicateCanvasImage(id),
     'canvas-image.toggle-lock': ({ id }) => {
-      const ci = canvasImages.find(c => c.id === id)
+      const ci = assets.find((a): a is CanvasImageAsset => a.id === id && a.kind === 'canvas-image')
       if (ci) updateCanvasImage({ ...ci, locked: !ci.locked })
     },
     'canvas-image.drag': ({ id }) => enterImageDragMode(id),
     'ui.world-index': () => setShowIndex(true),
     'ui.asset-index': () => setShowAssetIndex(true),
-  }), [createEntityAt, deleteEntity, toggleAssetPin, removeAsset, reverseEdge, deleteEdge, deleteCanvasImage, duplicateCanvasImage, canvasImages, updateCanvasImage, enterImageDragMode])
+  }), [createEntityAt, deleteEntity, toggleAssetPin, removeAsset, reverseEdge, deleteEdge, deleteCanvasImage, duplicateCanvasImage, assets, updateCanvasImage, enterImageDragMode])
 
   const executeCommand = useMemo(() => createCommandExecutor(commandRegistry), [commandRegistry])
 
@@ -1117,6 +1244,21 @@ export function GraphEditor({ projectId, onBackToDashboard }: GraphEditorProps) 
                   New Asset
                 </button>
                 <button onClick={() => {
+                  const now = new Date().toISOString()
+                  const docId = `doc-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`
+                  addNotebook({
+                    id: `notebook-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+                    kind: 'notebook', title: 'New Notebook', tags: [],
+                    createdAt: now, updatedAt: now,
+                    linkedEntityIds: [], isPinnedOnCanvas: false,
+                    documents: [{ id: docId, title: 'Overview', createdAt: now, updatedAt: now, content: [] }],
+                    activeDocumentId: docId,
+                  })
+                  setShowHamburger(false)
+                }} style={dropdownItem}>
+                  New Notebook
+                </button>
+                <button onClick={() => {
                   setNewCanvasImagePos(screenToFlowPosition({ x: window.innerWidth / 2, y: window.innerHeight / 2 }))
                   setShowNewCanvasImage(true); setShowHamburger(false)
                 }} style={dropdownItem}>
@@ -1186,6 +1328,7 @@ export function GraphEditor({ projectId, onBackToDashboard }: GraphEditorProps) 
           onPaneContextMenu={onPaneContextMenu}
           onNodeContextMenu={onNodeContextMenu as any}
           onEdgeContextMenu={onEdgeContextMenu}
+          onNodeDoubleClick={onNodeDoubleClick as any}
           zoomOnDoubleClick={false}
           fitView
         >
@@ -1243,6 +1386,18 @@ export function GraphEditor({ projectId, onBackToDashboard }: GraphEditorProps) 
               onUnlink={unlinkAssetFromEntity}
             />
           )}
+          {selectedNode && isAssetNode && selectedNotebook && (
+            <NotebookInspectorPanel
+              notebook={selectedNotebook}
+              nodes={nodes}
+              onUpdate={updateNotebook}
+              onRemove={removeNotebook}
+              onLink={linkAssetToEntity}
+              onUnlink={unlinkAssetFromEntity}
+              onOpen={() => openNotebook(selectedNotebook.id)}
+              isOpen={openNotebookId === selectedNotebook.id}
+            />
+          )}
           {selectedNode && !isAssetNode && !isCanvasImageNode && (story
             ? <StoryEntityPanel
                 node={selectedNode} schemaTypes={schemaTypes} conceptSchemas={conceptSchema}
@@ -1250,7 +1405,7 @@ export function GraphEditor({ projectId, onBackToDashboard }: GraphEditorProps) 
                 onUpdate={updateNode}
                 isRoot={selectedNode.id === rootNodeId}
                 onToggleRoot={() => setRootNodeId(prev => prev === selectedNode.id ? null : selectedNode.id)}
-                assets={assets} onAddAsset={addAsset} onUpdateAsset={updateAsset} onLinkAsset={linkAssetToEntity} onUnlinkAsset={unlinkAssetFromEntity} onToggleAssetPin={toggleAssetPin}
+                assets={attachmentAssets} onAddAsset={addAsset} onUpdateAsset={updateAsset} onLinkAsset={linkAssetToEntity} onUnlinkAsset={unlinkAssetFromEntity} onToggleAssetPin={toggleAssetPin}
               />
             : <SystemEntityPanel
                 node={selectedNode} schemaTypes={schemaTypes} conceptSchemas={conceptSchema}
@@ -1258,7 +1413,7 @@ export function GraphEditor({ projectId, onBackToDashboard }: GraphEditorProps) 
                 onUpdate={updateNode}
                 isRoot={selectedNode.id === rootNodeId}
                 onToggleRoot={() => setRootNodeId(prev => prev === selectedNode.id ? null : selectedNode.id)}
-                assets={assets} onAddAsset={addAsset} onUpdateAsset={updateAsset} onLinkAsset={linkAssetToEntity} onUnlinkAsset={unlinkAssetFromEntity} onToggleAssetPin={toggleAssetPin}
+                assets={attachmentAssets} onAddAsset={addAsset} onUpdateAsset={updateAsset} onLinkAsset={linkAssetToEntity} onUnlinkAsset={unlinkAssetFromEntity} onToggleAssetPin={toggleAssetPin}
               />
           )}
           {selectedEdge && (story
@@ -1301,7 +1456,7 @@ export function GraphEditor({ projectId, onBackToDashboard }: GraphEditorProps) 
       )}
       {showAssetIndex && (
         <AssetIndexPanel
-          assets={assets} nodes={nodes}
+          assets={attachmentAssets} nodes={nodes}
           onUpdate={updateAsset}
           onRemove={removeAsset}
           onTogglePin={toggleAssetPin}
@@ -1310,14 +1465,30 @@ export function GraphEditor({ projectId, onBackToDashboard }: GraphEditorProps) 
       )}
       {showIndex && (
         <WorldIndexPanel
-          nodes={nodes} edges={edges} conceptSchemas={conceptSchema} assets={assets} canvasImages={canvasImages}
+          nodes={nodes} edges={edges} conceptSchemas={conceptSchema} assets={assets}
           onSelectNode={id => { setSelectedNodeId(id); setSelectedEdgeId(null) }}
           onSelectEdge={id => { setSelectedEdgeId(id); setSelectedNodeId(null) }}
           onToggleAssetPin={toggleAssetPin}
           onFocusCanvasImage={id => { setSelectedNodeId(`canvas-img-${id}`); setSelectedEdgeId(null) }}
+          onOpenNotebook={id => { openNotebook(id); setShowIndex(false) }}
           onClose={() => setShowIndex(false)}
         />
       )}
+      {openNotebookId && (() => {
+        const nb = assets.find(a => a.id === openNotebookId)
+        if (!nb || nb.kind !== 'notebook') return null
+        return (
+          <NotebookWorkspace
+            notebook={nb}
+            onUpdate={updateNotebook}
+            onClose={() => {
+              logger.info('NOTEBOOK', 'NOTEBOOK_CLOSE', { notebookId: openNotebookId })
+              setOpenNotebookId(null)
+            }}
+            worldIndex={worldIndex}
+          />
+        )
+      })()}
       {pendingConn && (
         <RelationshipModal
           sourceLabel={pendingSource} targetLabel={pendingTarget}
@@ -1342,7 +1513,8 @@ export function GraphEditor({ projectId, onBackToDashboard }: GraphEditorProps) 
       )}
       {showNewAsset && (
         <NewAssetModal
-          onAdd={createStandaloneAsset}
+          onAddAttachment={createStandaloneAsset}
+          onAddNotebook={createStandaloneNotebook}
           onCancel={() => setShowNewAsset(false)}
         />
       )}
@@ -1392,20 +1564,49 @@ const ASSET_TEMPLATES: { label: string; desc: string; entries: Omit<import('./ty
   { label: 'Custom', desc: 'empty container', entries: [] },
 ]
 
-function NewAssetModal({ onAdd, onCancel }: { onAdd: (a: AssetData) => void; onCancel: () => void }) {
+function NewAssetModal({
+  onAddAttachment, onAddNotebook, onCancel,
+}: {
+  onAddAttachment: (a: AttachmentAsset) => void
+  onAddNotebook: (n: NotebookAsset) => void
+  onCancel: () => void
+}) {
+  const [assetKind, setAssetKind] = useState<'attachment' | 'notebook'>('attachment')
   const [title, setTitle] = useState('')
   const [selectedTemplate, setSelectedTemplate] = useState(0)
+  const now = new Date().toISOString()
+  const genId = (prefix: string) => `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`
 
   const handleCreate = () => {
-    const tmpl = ASSET_TEMPLATES[selectedTemplate]
-    const eid = () => `entry-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`
-    onAdd({
-      id: `asset-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
-      title: title.trim() || tmpl.label,
-      linkedEntityIds: [],
-      isPinnedOnCanvas: true,
-      entries: tmpl.entries.map(e => ({ ...e, id: eid() })),
-    })
+    if (assetKind === 'notebook') {
+      const docId = genId('doc')
+      onAddNotebook({
+        id: genId('notebook'),
+        kind: 'notebook',
+        title: title.trim() || 'Untitled Notebook',
+        tags: [],
+        createdAt: now,
+        updatedAt: now,
+        linkedEntityIds: [],
+        isPinnedOnCanvas: false,
+        documents: [{ id: docId, title: 'Overview', createdAt: now, updatedAt: now, content: [] }],
+        activeDocumentId: docId,
+      })
+    } else {
+      const tmpl = ASSET_TEMPLATES[selectedTemplate]
+      const eid = () => genId('entry')
+      onAddAttachment({
+        id: genId('asset'),
+        kind: 'attachment',
+        title: title.trim() || (tmpl?.label ?? 'Asset'),
+        tags: [],
+        createdAt: now,
+        updatedAt: now,
+        linkedEntityIds: [],
+        isPinnedOnCanvas: true,
+        entries: (tmpl?.entries ?? []).map(e => ({ ...e, id: eid() })),
+      })
+    }
   }
 
   return (
@@ -1416,31 +1617,71 @@ function NewAssetModal({ onAdd, onCancel }: { onAdd: (a: AssetData) => void; onC
     }} onClick={onCancel}>
       <div onClick={e => e.stopPropagation()} style={{
         background: '#fff', borderRadius: 12, padding: '24px 28px',
-        width: 380, boxShadow: '0 8px 32px rgba(0,0,0,0.18)',
+        width: 400, boxShadow: '0 8px 32px rgba(0,0,0,0.18)',
         fontFamily: 'system-ui, sans-serif',
       }}>
-        <h2 style={{ margin: '0 0 16px', fontSize: 16, fontWeight: 700, color: '#18181b' }}>New Asset Container</h2>
-        <input value={title} onChange={e => setTitle(e.target.value)} placeholder="Title (optional)" style={{ ...inputStyle, marginBottom: 14 }} autoFocus />
-        <span style={{ fontSize: 11, fontWeight: 700, color: '#52525b', textTransform: 'uppercase', letterSpacing: 0.5 }}>
-          Template
-        </span>
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 6, marginTop: 8 }}>
-          {ASSET_TEMPLATES.map((tmpl, i) => (
+        <h2 style={{ margin: '0 0 16px', fontSize: 16, fontWeight: 700, color: '#18181b' }}>New Asset</h2>
+
+        {/* Kind selector */}
+        <div style={{ display: 'flex', gap: 6, marginBottom: 16 }}>
+          {(['attachment', 'notebook'] as const).map(k => (
             <button
-              key={tmpl.label}
-              onClick={() => setSelectedTemplate(i)}
+              key={k}
+              onClick={() => setAssetKind(k)}
               style={{
-                padding: '8px 12px', borderRadius: 6, textAlign: 'left',
-                border: `1.5px solid ${selectedTemplate === i ? '#6366f1' : '#e4e4e7'}`,
-                background: selectedTemplate === i ? '#ede9fe' : '#fff',
-                color: '#18181b', fontWeight: 600, fontSize: 13, cursor: 'pointer',
+                flex: 1, padding: '8px 10px', borderRadius: 8,
+                border: `1.5px solid ${assetKind === k ? '#6366f1' : '#e4e4e7'}`,
+                background: assetKind === k ? '#ede9fe' : '#fff',
+                color: assetKind === k ? '#4f46e5' : '#52525b',
+                fontWeight: 600, fontSize: 13, cursor: 'pointer',
+                display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6,
               }}
             >
-              {tmpl.label}
-              <span style={{ color: '#a1a1aa', fontWeight: 400, marginLeft: 8, fontSize: 11 }}>{tmpl.desc}</span>
+              {k === 'notebook' ? '📓 Notebook' : '📎 Attachment'}
             </button>
           ))}
         </div>
+
+        <input
+          value={title}
+          onChange={e => setTitle(e.target.value)}
+          placeholder={assetKind === 'notebook' ? 'Notebook title…' : 'Title (optional)'}
+          style={{ ...inputStyle, marginBottom: 14 }}
+          autoFocus
+          onKeyDown={e => { if (e.key === 'Enter') handleCreate() }}
+        />
+
+        {assetKind === 'attachment' && (
+          <>
+            <span style={{ fontSize: 11, fontWeight: 700, color: '#52525b', textTransform: 'uppercase', letterSpacing: 0.5 }}>
+              Template
+            </span>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 6, marginTop: 8 }}>
+              {ASSET_TEMPLATES.map((tmpl, i) => (
+                <button
+                  key={tmpl.label}
+                  onClick={() => setSelectedTemplate(i)}
+                  style={{
+                    padding: '8px 12px', borderRadius: 6, textAlign: 'left',
+                    border: `1.5px solid ${selectedTemplate === i ? '#6366f1' : '#e4e4e7'}`,
+                    background: selectedTemplate === i ? '#ede9fe' : '#fff',
+                    color: '#18181b', fontWeight: 600, fontSize: 13, cursor: 'pointer',
+                  }}
+                >
+                  {tmpl.label}
+                  <span style={{ color: '#a1a1aa', fontWeight: 400, marginLeft: 8, fontSize: 11 }}>{tmpl.desc}</span>
+                </button>
+              ))}
+            </div>
+          </>
+        )}
+
+        {assetKind === 'notebook' && (
+          <p style={{ fontSize: 13, color: '#71717a', margin: '0 0 4px' }}>
+            Creates a notebook with one document. Add more documents from inside the notebook.
+          </p>
+        )}
+
         <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end', marginTop: 18 }}>
           <button onClick={onCancel} style={{
             padding: '7px 14px', borderRadius: 6, border: '1px solid #d4d4d8',
@@ -1460,21 +1701,28 @@ function NewAssetModal({ onAdd, onCancel }: { onAdd: (a: AssetData) => void; onC
 
 function NewCanvasImageModal({ position, onAdd, onCancel }: {
   position: { x: number; y: number }
-  onAdd: (ci: CanvasImage) => void
+  onAdd: (ci: CanvasImageAsset) => void
   onCancel: () => void
 }) {
   const [title, setTitle] = useState('Untitled Image')
   const [imageUrl, setImageUrl] = useState('')
   const [width, setWidth] = useState(400)
   const [height, setHeight] = useState(300)
+  const now = new Date().toISOString()
 
   const handleCreate = () => {
     if (!imageUrl.trim()) return
     onAdd({
       id: `ci-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+      kind: 'canvas-image',
       title: title.trim(),
+      tags: [],
+      createdAt: now,
+      updatedAt: now,
+      linkedEntityIds: [],
+      isPinnedOnCanvas: true,
+      position,
       imageUrl: imageUrl.trim(),
-      x: position.x, y: position.y,
       width, height,
       rotation: 0, opacity: 1, locked: false, zIndex: 0,
     })
@@ -1510,8 +1758,8 @@ function NewCanvasImageModal({ position, onAdd, onCancel }: {
 // ── Canvas Image Inspector ───────────────────────────────────────────────
 
 function CanvasImageInspector({ image, onUpdate, onDuplicate, onDelete }: {
-  image: CanvasImage
-  onUpdate: (ci: CanvasImage) => void
+  image: CanvasImageAsset
+  onUpdate: (ci: CanvasImageAsset) => void
   onDuplicate: (id: string) => void
   onDelete: (id: string) => void
 }) {
@@ -1589,9 +1837,9 @@ type EntityPanelProps = {
   onUpdate: (u: Partial<NodeData>) => void
   isRoot: boolean
   onToggleRoot: () => void
-  assets: AssetData[]
-  onAddAsset: (asset: AssetData) => void
-  onUpdateAsset: (asset: AssetData) => void
+  assets: AttachmentAsset[]
+  onAddAsset: (asset: AttachmentAsset) => void
+  onUpdateAsset: (asset: AttachmentAsset) => void
   onLinkAsset: (assetId: string, entityId: string) => void
   onUnlinkAsset: (assetId: string, entityId: string) => void
   onToggleAssetPin: (assetId: string) => void
@@ -2059,9 +2307,9 @@ function SystemEdgePanel({ edge, nodes, relTypes, onUpdateLabel, onUpdateDescrip
 // ── Asset inspector panel ─────────────────────────────────────────────────
 
 type AssetInspectorProps = {
-  asset: AssetData
+  asset: AttachmentAsset
   nodes: GraphNode[]
-  onUpdate: (a: AssetData) => void
+  onUpdate: (a: AttachmentAsset) => void
   onRemove: (id: string) => void
   onTogglePin: (id: string) => void
   onLink: (assetId: string, entityId: string) => void
@@ -2210,6 +2458,97 @@ function AssetInspectorPanel({ asset, nodes, onUpdate, onRemove, onTogglePin, on
         fontWeight: 600, fontSize: 12, width: '100%', transition: 'all 0.15s',
       }}>
         Delete Asset
+      </button>
+    </>
+  )
+}
+
+// ── Notebook inspector panel ──────────────────────────────────────────────
+
+type NotebookInspectorProps = {
+  notebook: NotebookAsset
+  nodes: GraphNode[]
+  onUpdate: (n: NotebookAsset) => void
+  onRemove: (id: string) => void
+  onLink: (assetId: string, entityId: string) => void
+  onUnlink: (assetId: string, entityId: string) => void
+  onOpen: () => void
+  isOpen: boolean
+}
+
+function NotebookInspectorPanel({ notebook, nodes, onUpdate, onRemove, onLink, onUnlink, onOpen, isOpen }: NotebookInspectorProps) {
+  const [showLinkPicker, setShowLinkPicker] = useState(false)
+
+  const linkedEntities   = nodes.filter(n => n.type === 'circle' && notebook.linkedEntityIds.includes(n.id))
+  const unlinkableEntities = nodes.filter(n => n.type === 'circle' && !notebook.linkedEntityIds.includes(n.id))
+
+  return (
+    <>
+      <h2 style={panelHeading}>Notebook</h2>
+
+      <PanelField label="Title">
+        <input
+          value={notebook.title}
+          onChange={e => onUpdate({ ...notebook, title: e.target.value, updatedAt: new Date().toISOString() })}
+          style={inputStyle}
+        />
+      </PanelField>
+
+      <PanelField label="Documents">
+        <span style={{ fontSize: 13, color: '#52525b' }}>
+          {notebook.documents.length} document{notebook.documents.length !== 1 ? 's' : ''}
+        </span>
+      </PanelField>
+
+      <button
+        onClick={onOpen}
+        style={{
+          width: '100%', padding: '8px 12px', borderRadius: 6,
+          border: 'none', background: isOpen ? '#4f46e5' : '#6366f1',
+          color: '#fff', fontWeight: 700, fontSize: 13, cursor: 'pointer',
+          marginBottom: 6,
+        }}
+      >
+        {isOpen ? 'Notebook is Open' : 'Open Notebook'}
+      </button>
+
+      <PanelField label="Linked Entities">
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+          {linkedEntities.length === 0 && <span style={{ fontSize: 13, color: '#a1a1aa' }}>None</span>}
+          {linkedEntities.map(n => (
+            <div key={n.id} style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '4px 6px', background: '#fff', border: '1px solid #e4e4e7', borderRadius: 5 }}>
+              <span style={{ fontSize: 12, fontWeight: 600, color: '#18181b', flex: 1 }}>{n.data.label}</span>
+              <button onClick={() => onUnlink(notebook.id, n.id)} style={{ fontSize: 10, color: '#dc2626', background: 'none', border: 'none', cursor: 'pointer', fontWeight: 600 }}>Unlink</button>
+            </div>
+          ))}
+          {showLinkPicker ? (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 4, padding: '6px', background: '#f9fafb', borderRadius: 5, border: '1px solid #e4e4e7' }}>
+              {unlinkableEntities.length === 0
+                ? <span style={{ fontSize: 12, color: '#a1a1aa' }}>All entities linked</span>
+                : unlinkableEntities.slice(0, 10).map(n => (
+                  <button key={n.id} onClick={() => { onLink(notebook.id, n.id); setShowLinkPicker(false) }} style={{
+                    padding: '4px 8px', borderRadius: 4, textAlign: 'left', border: '1px solid #e4e4e7',
+                    background: '#fff', color: '#18181b', fontSize: 12, cursor: 'pointer', fontWeight: 600,
+                  }}>{n.data.label}</button>
+                ))
+              }
+              <button onClick={() => setShowLinkPicker(false)} style={{ fontSize: 11, color: '#71717a', background: 'none', border: 'none', cursor: 'pointer', alignSelf: 'flex-end' }}>Cancel</button>
+            </div>
+          ) : (
+            <button onClick={() => setShowLinkPicker(true)} style={{
+              padding: '4px 8px', borderRadius: 5, border: '1px dashed #d4d4d8', background: '#fafafa',
+              color: '#71717a', fontWeight: 600, fontSize: 11, cursor: 'pointer', textAlign: 'center',
+            }}>+ Link Entity</button>
+          )}
+        </div>
+      </PanelField>
+
+      <button onClick={() => onRemove(notebook.id)} style={{
+        padding: '6px 12px', background: '#fff', color: '#dc2626',
+        border: '1px solid #fecaca', borderRadius: 6, cursor: 'pointer',
+        fontWeight: 600, fontSize: 12, width: '100%', transition: 'all 0.15s',
+      }}>
+        Delete Notebook
       </button>
     </>
   )

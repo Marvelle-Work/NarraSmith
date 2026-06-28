@@ -1,7 +1,7 @@
 import type { SchemaType } from './schema'
 import type { RelationshipType } from './relationshipSchema'
 import type { ConceptSchemaType } from './conceptSchema'
-import type { AssetData, AssetEntry, CanvasImage, SizeLevel } from './types'
+import type { Asset, AttachmentAsset, AssetEntry, CanvasImageAsset, NotebookAsset, NotebookDocument, Block, SizeLevel } from './types'
 import type { ProjectGraph, ProjectData, ProjectStore } from './projectStore'
 import { getActiveProject, saveProjectStore } from './projectStore'
 import { uid } from './schema'
@@ -27,11 +27,28 @@ export type WorldEntity = {
   rootGlowColor?: string
 }
 
+// WorldAsset is the serialized form of AttachmentAsset in the export format.
+// CanvasImageAssets are stored separately in the page's canvasImages array.
 export type WorldAsset = {
   id: string
   title: string
   linkedEntityIds: string[]
   entries: AssetEntry[]
+}
+
+// CanvasImageRecord matches the old CanvasImage shape for export format stability.
+export type CanvasImageRecord = {
+  id: string
+  title: string
+  imageUrl: string
+  x: number
+  y: number
+  width: number
+  height: number
+  rotation: number
+  opacity: number
+  locked: boolean
+  zIndex: number
 }
 
 export type WorldRelationship = {
@@ -49,6 +66,15 @@ export type WorldRelationship = {
   labelT?: number
 }
 
+export type WorldNotebook = {
+  id: string
+  title: string
+  description?: string
+  tags?: string[]
+  linkedEntityIds?: string[]
+  documents: { id: string; title: string; createdAt: string; updatedAt: string; content: Block[] }[]
+}
+
 export type NarrasmithWorld = {
   entities: WorldEntity[]
   assets: WorldAsset[]
@@ -56,6 +82,7 @@ export type NarrasmithWorld = {
   entitySchemas: SchemaType[]
   relationshipSchemas: RelationshipType[]
   conceptSchemas: ConceptSchemaType[]
+  notebooks?: WorldNotebook[]
 }
 
 export type PageEntityLayout = {
@@ -77,7 +104,7 @@ export type NarrasmithPage = {
   rootEntityId?: string
   entityLayouts: PageEntityLayout[]
   assetLayouts: PageAssetLayout[]
-  canvasImages: CanvasImage[]
+  canvasImages: CanvasImageRecord[]
 }
 
 export type NarrasmithExportV2 = {
@@ -112,8 +139,8 @@ export type NarrasmithExport = {
   relationshipSchema: RelationshipType[]
   conceptSchema: ConceptSchemaType[]
   graph: ProjectGraph
-  assets?: AssetData[]
-  canvasImages?: CanvasImage[]
+  assets?: WorldAsset[]
+  canvasImages?: CanvasImageRecord[]
 }
 
 // ── Fragment format ─────────────────────────────────────────────────────
@@ -125,8 +152,8 @@ export type NarrasmithFragment = {
   entitySchema?: SchemaType[]
   relationshipSchema?: RelationshipType[]
   conceptSchema?: ConceptSchemaType[]
-  assets?: AssetData[]
-  canvasImages?: CanvasImage[]
+  assets?: WorldAsset[]
+  canvasImages?: CanvasImageRecord[]
   nodes: Record<string, unknown>[]
   edges: Record<string, unknown>[]
 }
@@ -138,18 +165,115 @@ export type MergeableContent = {
   relationshipSchema: RelationshipType[]
   conceptSchema: ConceptSchemaType[]
   graph: ProjectGraph
-  assets: AssetData[]
-  canvasImages: CanvasImage[]
+  assets: Asset[]
+}
+
+// ── Serialization helpers ──────────────────────────────────────────────
+
+function worldAssetToAttachment(a: WorldAsset, pos?: { x: number; y: number }): AttachmentAsset {
+  const now = new Date().toISOString()
+  return {
+    id: a.id,
+    kind: 'attachment',
+    title: a.title,
+    tags: [],
+    createdAt: now,
+    updatedAt: now,
+    linkedEntityIds: a.linkedEntityIds,
+    isPinnedOnCanvas: !!pos,
+    ...(pos && { position: pos }),
+    entries: a.entries ?? [],
+  }
+}
+
+function canvasImageRecordToAsset(ci: CanvasImageRecord): CanvasImageAsset {
+  const now = new Date().toISOString()
+  return {
+    id: ci.id,
+    kind: 'canvas-image',
+    title: ci.title,
+    tags: [],
+    createdAt: now,
+    updatedAt: now,
+    linkedEntityIds: [],
+    isPinnedOnCanvas: true,
+    position: { x: ci.x, y: ci.y },
+    imageUrl: ci.imageUrl,
+    width: ci.width,
+    height: ci.height,
+    rotation: ci.rotation ?? 0,
+    opacity: ci.opacity ?? 1,
+    locked: ci.locked ?? false,
+    zIndex: ci.zIndex ?? 0,
+  }
+}
+
+function attachmentToWorldAsset(a: AttachmentAsset): WorldAsset {
+  return { id: a.id, title: a.title, linkedEntityIds: a.linkedEntityIds, entries: a.entries }
+}
+
+function notebookAssetToWorld(a: NotebookAsset): WorldNotebook {
+  return {
+    id: a.id,
+    title: a.title,
+    ...(a.description != null && { description: a.description }),
+    ...(a.tags?.length && { tags: a.tags }),
+    ...(a.linkedEntityIds.length && { linkedEntityIds: a.linkedEntityIds }),
+    documents: a.documents.map(d => ({
+      id: d.id,
+      title: d.title,
+      createdAt: d.createdAt,
+      updatedAt: d.updatedAt,
+      content: d.content as Block[],
+    })),
+  }
+}
+
+function worldNotebookToAsset(n: WorldNotebook): NotebookAsset {
+  const now = new Date().toISOString()
+  return {
+    id: n.id,
+    kind: 'notebook',
+    title: n.title,
+    description: n.description,
+    tags: n.tags ?? [],
+    createdAt: now,
+    updatedAt: now,
+    linkedEntityIds: n.linkedEntityIds ?? [],
+    isPinnedOnCanvas: false,
+    documents: (n.documents ?? []).map((d): NotebookDocument => ({
+      id: d.id,
+      title: d.title,
+      createdAt: d.createdAt ?? now,
+      updatedAt: d.updatedAt ?? now,
+      content: (d.content ?? []) as Block[],
+    })),
+  }
+}
+
+function canvasImageAssetToRecord(a: CanvasImageAsset): CanvasImageRecord {
+  return {
+    id: a.id,
+    title: a.title,
+    imageUrl: a.imageUrl,
+    x: a.position?.x ?? 0,
+    y: a.position?.y ?? 0,
+    width: a.width,
+    height: a.height,
+    rotation: a.rotation,
+    opacity: a.opacity,
+    locked: a.locked,
+    zIndex: a.zIndex,
+  }
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
-// Internal: reconstruct internal graph from v2 world + page
+// Internal: reconstruct unified Asset[] from v2 world + page
 // ═══════════════════════════════════════════════════════════════════════════
 
-function buildGraphFromV2(data: NarrasmithExportV2): {
+function buildAssetsFromV2(data: NarrasmithExportV2): {
+  assets: Asset[]
   graph: ProjectGraph
-  assets: AssetData[]
-  canvasImages: CanvasImage[]
 } {
   const page: NarrasmithPage = data.pages?.[0] ?? {
     id: 'overview', name: 'Overview',
@@ -159,7 +283,7 @@ function buildGraphFromV2(data: NarrasmithExportV2): {
   const layoutMap = new Map(page.entityLayouts.map(l => [l.entityId, { x: l.x, y: l.y }]))
   const assetLayoutMap = new Map(page.assetLayouts.map(l => [l.assetId, { x: l.x, y: l.y }]))
 
-  // Entity circle nodes — positions come from page layout
+  // Entity circle nodes
   const entityNodes = data.world.entities.map((e, i) => {
     const pos = layoutMap.get(e.id) ?? { x: 100 + (i % 5) * 200, y: 100 + Math.floor(i / 5) * 200 }
     return {
@@ -183,37 +307,36 @@ function buildGraphFromV2(data: NarrasmithExportV2): {
     }
   })
 
-  // AssetData records — pin state and position come from page asset layouts
-  const assets: AssetData[] = data.world.assets.map(a => {
-    const pos = assetLayoutMap.get(a.id)
-    return {
-      id: a.id,
-      title: a.title,
-      linkedEntityIds: a.linkedEntityIds,
-      entries: a.entries,
-      isPinnedOnCanvas: !!pos,
-      ...(pos && { position: pos }),
-    }
-  })
+  // Attachment assets from world.assets
+  const attachmentAssets: AttachmentAsset[] = data.world.assets.map(a =>
+    worldAssetToAttachment(a, assetLayoutMap.get(a.id)),
+  )
+
+  // Canvas image assets from page.canvasImages
+  const canvasImageAssets: CanvasImageAsset[] = (page.canvasImages ?? []).map(canvasImageRecordToAsset)
+
+  // Notebook assets from world.notebooks
+  const notebookAssets: NotebookAsset[] = (data.world.notebooks ?? []).map(worldNotebookToAsset)
+
+  const assets: Asset[] = [...attachmentAssets, ...canvasImageAssets, ...notebookAssets]
 
   const entityNodeIds = new Set(entityNodes.map(n => n.id))
 
-  // Asset canvas nodes — only for assets that have a page layout entry
-  const assetCanvasNodes = assets
+  // Asset canvas nodes (pinned attachment assets only)
+  const assetCanvasNodes = attachmentAssets
     .filter(a => a.isPinnedOnCanvas && a.position)
     .map(a => {
-      const entries = a.entries ?? []
-      const summary = entries.slice(0, 3).map(e => e.label || e.type).join(', ')
+      const summary = a.entries.slice(0, 3).map(e => e.label || e.type).join(', ')
       return {
         id: `asset-node-${a.id}`,
         type: 'asset',
         position: a.position!,
-        data: { assetId: a.id, title: a.title, entryCount: entries.length, entrySummary: summary },
+        data: { assetId: a.id, title: a.title, entryCount: a.entries.length, entrySummary: summary },
       }
     })
 
-  // Tether edges derived from linkedEntityIds — never stored, always derived
-  const tetherEdges = assets
+  // Tether edges for pinned attachment assets
+  const tetherEdges = attachmentAssets
     .filter(a => a.isPinnedOnCanvas)
     .flatMap(a =>
       a.linkedEntityIds
@@ -226,7 +349,7 @@ function buildGraphFromV2(data: NarrasmithExportV2): {
         }))
     )
 
-  // Relationship edges from world relationships
+  // Relationship edges
   const relEdges = data.world.relationships.map(r => ({
     id: r.id,
     source: r.source,
@@ -245,12 +368,11 @@ function buildGraphFromV2(data: NarrasmithExportV2): {
     },
   }))
 
-  // Canvas images from page — nodes are synthesized for normalizeGraph
-  const canvasImages = page.canvasImages ?? []
-  const canvasImageNodes = canvasImages.map(ci => ({
+  // Canvas image React Flow nodes
+  const canvasImageNodes = canvasImageAssets.map(ci => ({
     id: `canvas-img-${ci.id}`,
     type: 'canvas-image',
-    position: { x: ci.x, y: ci.y },
+    position: ci.position ?? { x: 0, y: 0 },
     draggable: !ci.locked,
     selectable: true,
     data: {
@@ -266,47 +388,50 @@ function buildGraphFromV2(data: NarrasmithExportV2): {
   }))
 
   return {
+    assets,
     graph: {
       nodes: [...canvasImageNodes, ...entityNodes, ...assetCanvasNodes] as any,
       edges: [...relEdges, ...tetherEdges] as any,
       rootNodeId: page.rootEntityId,
     },
-    assets,
-    canvasImages,
   }
 }
 
 function toMergeable(data: NarrasmithExportV2 | NarrasmithExport | NarrasmithFragment): MergeableContent {
   if (data.format === 'narrasmith-fragment') {
     const d = data as NarrasmithFragment
+    const now = new Date().toISOString()
+    const attachments: AttachmentAsset[] = (d.assets ?? []).map(a => worldAssetToAttachment(a))
+    const canvasImages: CanvasImageAsset[] = (d.canvasImages ?? []).map(canvasImageRecordToAsset)
     return {
       entitySchema: d.entitySchema ?? [],
       relationshipSchema: d.relationshipSchema ?? [],
       conceptSchema: d.conceptSchema ?? [],
       graph: { nodes: d.nodes, edges: d.edges },
-      assets: d.assets ?? [],
-      canvasImages: d.canvasImages ?? [],
+      assets: [...attachments, ...canvasImages],
     }
   }
   if ((data as any).version === 2) {
     const d = data as NarrasmithExportV2
-    const built = buildGraphFromV2(d)
+    const { assets, graph } = buildAssetsFromV2(d)
     return {
       entitySchema: d.world.entitySchemas,
       relationshipSchema: d.world.relationshipSchemas,
       conceptSchema: d.world.conceptSchemas,
-      ...built,
+      graph,
+      assets,
     }
   }
   // v1
   const d = data as NarrasmithExport
+  const attachments: AttachmentAsset[] = (d.assets ?? []).map(a => worldAssetToAttachment(a))
+  const canvasImages: CanvasImageAsset[] = (d.canvasImages ?? []).map(canvasImageRecordToAsset)
   return {
     entitySchema: d.entitySchema,
     relationshipSchema: d.relationshipSchema,
     conceptSchema: d.conceptSchema,
     graph: d.graph,
-    assets: d.assets ?? [],
-    canvasImages: d.canvasImages ?? [],
+    assets: [...attachments, ...canvasImages],
   }
 }
 
@@ -358,59 +483,58 @@ export function buildExportPayload(store: ProjectStore, projectId?: string): { j
   const allNodes = project.graph.nodes as any[]
   const allEdges = project.graph.edges as any[]
 
-  // World entities: circle nodes only.
-  // Asset and canvas-image nodes are derived — they live in pages, not world.
   const circleNodes = allNodes.filter(n => n.type === 'circle')
   const entities: WorldEntity[] = circleNodes.map(n => ({
     id: n.id,
     label: n.data?.label ?? 'Untitled',
     entityType: n.data?.entityType ?? 'Character',
-    ...(n.data?.typeId != null         && { typeId: n.data.typeId }),
-    ...(n.data?.fields != null         && { fields: n.data.fields }),
-    ...(n.data?.description != null    && { description: n.data.description }),
-    ...(n.data?.color != null          && { color: n.data.color }),
-    ...(n.data?.sizeLevel != null      && { sizeLevel: n.data.sizeLevel }),
-    ...(n.data?.concepts != null       && { concepts: n.data.concepts }),
+    ...(n.data?.typeId != null          && { typeId: n.data.typeId }),
+    ...(n.data?.fields != null          && { fields: n.data.fields }),
+    ...(n.data?.description != null     && { description: n.data.description }),
+    ...(n.data?.color != null           && { color: n.data.color }),
+    ...(n.data?.sizeLevel != null       && { sizeLevel: n.data.sizeLevel }),
+    ...(n.data?.concepts != null        && { concepts: n.data.concepts }),
     ...(n.data?.profileImageUrl != null && { profileImageUrl: n.data.profileImageUrl }),
-    ...(n.data?.labelColor != null     && { labelColor: n.data.labelColor }),
-    ...(n.data?.rootGlowColor != null  && { rootGlowColor: n.data.rootGlowColor }),
+    ...(n.data?.labelColor != null      && { labelColor: n.data.labelColor }),
+    ...(n.data?.rootGlowColor != null   && { rootGlowColor: n.data.rootGlowColor }),
   }))
 
   const entityLayouts: PageEntityLayout[] = circleNodes
     .filter(n => n.position)
     .map(n => ({ entityId: n.id, x: n.position.x, y: n.position.y }))
 
-  // World assets: strip position and pin state — those belong to page layouts
-  const worldAssets: WorldAsset[] = (project.assets ?? []).map(a => ({
-    id: a.id,
-    title: a.title,
-    linkedEntityIds: a.linkedEntityIds,
-    entries: a.entries,
-  }))
+  // Split unified assets by kind for the v2 format
+  const attachmentAssets = (project.assets ?? []).filter((a): a is AttachmentAsset => a.kind === 'attachment')
+  const canvasImageAssets = (project.assets ?? []).filter((a): a is CanvasImageAsset => a.kind === 'canvas-image')
+  const notebookAssets = (project.assets ?? []).filter((a): a is NotebookAsset => a.kind === 'notebook')
 
-  const assetLayouts: PageAssetLayout[] = (project.assets ?? [])
+  const worldAssets: WorldAsset[] = attachmentAssets.map(attachmentToWorldAsset)
+  const assetLayouts: PageAssetLayout[] = attachmentAssets
     .filter(a => a.isPinnedOnCanvas && a.position)
     .map(a => ({ assetId: a.id, x: a.position!.x, y: a.position!.y }))
 
-  // World relationships: relationship edges only — tether edges are derived
+  const canvasImageRecords: CanvasImageRecord[] = canvasImageAssets.map(canvasImageAssetToRecord)
+
   const relationships: WorldRelationship[] = allEdges
     .filter(e => e.type === 'relationship')
     .map(e => ({
       id: e.id,
       source: e.source,
       target: e.target,
-      ...(e.sourceHandle != null            && { sourceHandle: e.sourceHandle }),
-      ...(e.targetHandle != null            && { targetHandle: e.targetHandle }),
-      ...(e.label != null                   && { label: e.label }),
+      ...(e.sourceHandle != null             && { sourceHandle: e.sourceHandle }),
+      ...(e.targetHandle != null             && { targetHandle: e.targetHandle }),
+      ...(e.label != null                    && { label: e.label }),
       ...(e.data?.relationshipTypeId != null && { relationshipTypeId: e.data.relationshipTypeId }),
-      ...(e.data?.description != null       && { description: e.data.description }),
-      ...(e.data?.whyItMatters != null      && { whyItMatters: e.data.whyItMatters }),
-      ...(e.data?.color != null             && { color: e.data.color }),
-      ...(e.data?.schemaColor != null       && { schemaColor: e.data.schemaColor }),
+      ...(e.data?.description != null        && { description: e.data.description }),
+      ...(e.data?.whyItMatters != null       && { whyItMatters: e.data.whyItMatters }),
+      ...(e.data?.color != null              && { color: e.data.color }),
+      ...(e.data?.schemaColor != null        && { schemaColor: e.data.schemaColor }),
       ...(e.data?.labelT != null && e.data.labelT !== 0.5 && { labelT: e.data.labelT }),
     }))
 
   const rootEntityId: string | undefined = (project.graph as any).rootNodeId ?? undefined
+
+  const worldNotebooks: WorldNotebook[] = notebookAssets.map(notebookAssetToWorld)
 
   const payload: NarrasmithExportV2 = {
     format: 'narrasmith-project',
@@ -429,6 +553,7 @@ export function buildExportPayload(store: ProjectStore, projectId?: string): { j
       entitySchemas: project.entitySchema,
       relationshipSchemas: project.relSchema,
       conceptSchemas: project.conceptSchema,
+      ...(worldNotebooks.length && { notebooks: worldNotebooks }),
     },
     pages: [{
       id: 'overview',
@@ -436,7 +561,7 @@ export function buildExportPayload(store: ProjectStore, projectId?: string): { j
       ...(rootEntityId && { rootEntityId }),
       entityLayouts,
       assetLayouts,
-      canvasImages: project.canvasImages ?? [],
+      canvasImages: canvasImageRecords,
     }],
   }
 
@@ -446,6 +571,8 @@ export function buildExportPayload(store: ProjectStore, projectId?: string): { j
     entities: entities.length,
     relationships: relationships.length,
     assets: worldAssets.length,
+    notebooks: worldNotebooks.length,
+    canvasImages: canvasImageRecords.length,
     entitySchemas: project.entitySchema.length,
     bytes: json.length,
   })
@@ -582,7 +709,6 @@ export function buildContentPreview(data: NarrasmithExportV2 | NarrasmithExport 
       conceptSchemaCount: d.world.conceptSchemas.length,
     }
   }
-  // v1
   const d = data as NarrasmithExport
   const circleNodes = (d.graph?.nodes as any[] ?? []).filter((n: any) => n.type === 'circle')
   const relEdges = (d.graph?.edges as any[] ?? []).filter((e: any) => e.type === 'relationship')
@@ -610,7 +736,7 @@ function importProjectV2(data: NarrasmithExportV2, store: ProjectStore): Project
   const newId = `project-${uid()}`
   const now = new Date().toISOString()
   logger.time('IMPORT_V2_BUILD_GRAPH')
-  const { graph, assets, canvasImages } = buildGraphFromV2(data)
+  const { assets, graph } = buildAssetsFromV2(data)
   logger.timeEnd('IMPORT_V2_BUILD_GRAPH')
 
   const project: ProjectData = {
@@ -623,7 +749,6 @@ function importProjectV2(data: NarrasmithExportV2, store: ProjectStore): Project
     relSchema: data.world.relationshipSchemas,
     conceptSchema: data.world.conceptSchemas,
     assets,
-    canvasImages,
   }
 
   logger.info('IMPORT', 'v2 project imported', {
@@ -634,6 +759,7 @@ function importProjectV2(data: NarrasmithExportV2, store: ProjectStore): Project
     entitySchemas: data.world.entitySchemas.length,
     assets: assets.length,
   })
+
   const next: ProjectStore = {
     ...store,
     activeProjectId: newId,
@@ -647,16 +773,20 @@ function importProjectV1(data: NarrasmithExport, store: ProjectStore): ProjectSt
   const newId = `project-${uid()}`
   const now = new Date().toISOString()
 
-  // If assets array absent or empty but graph has asset nodes, reconstruct minimal AssetData.
-  // This handles very old v1 exports that predate the assets field.
-  let assets: AssetData[] = data.assets ?? []
-  if (assets.length === 0) {
+  let attachments: AttachmentAsset[] = (data.assets ?? []).map(a => worldAssetToAttachment(a))
+
+  // Reconstruct from asset graph nodes if the assets field is absent (very old v1)
+  if (attachments.length === 0) {
     const assetNodes = (data.graph?.nodes as any[] ?? []).filter((n: any) => n.type === 'asset')
     if (assetNodes.length > 0) {
       logger.warn('IMPORT', `v1 import: reconstructing ${assetNodes.length} asset(s) from graph nodes — entries will be empty`)
-      assets = assetNodes.map((n: any) => ({
+      attachments = assetNodes.map((n: any): AttachmentAsset => ({
         id: n.data?.assetId ?? n.id.replace('asset-node-', ''),
+        kind: 'attachment',
         title: n.data?.title ?? 'Untitled Asset',
+        tags: [],
+        createdAt: now,
+        updatedAt: now,
         linkedEntityIds: [],
         isPinnedOnCanvas: true,
         position: n.position,
@@ -664,6 +794,9 @@ function importProjectV1(data: NarrasmithExport, store: ProjectStore): ProjectSt
       }))
     }
   }
+
+  const canvasImages: CanvasImageAsset[] = (data.canvasImages ?? []).map(canvasImageRecordToAsset)
+  const assets: Asset[] = [...attachments, ...canvasImages]
 
   const project: ProjectData = {
     id: newId,
@@ -675,7 +808,6 @@ function importProjectV1(data: NarrasmithExport, store: ProjectStore): ProjectSt
     relSchema: data.relationshipSchema,
     conceptSchema: data.conceptSchema,
     assets,
-    canvasImages: data.canvasImages ?? [],
   }
 
   const next: ProjectStore = {
@@ -795,7 +927,6 @@ export function mergeIntoProject(
 ): { project: ProjectData; report: MergeReport } {
   const m = toMergeable(data)
 
-  // Only remap entity (circle) nodes — asset and canvas-image nodes are derived
   const existingEntityIds = new Set(
     (currentProject.graph.nodes as any[])
       .filter(n => n.type === 'circle')
@@ -812,28 +943,29 @@ export function mergeIntoProject(
   const relResult     = deduplicateByName(currentProject.relSchema, m.relationshipSchema)
   const conceptResult = deduplicateByName(currentProject.conceptSchema, m.conceptSchema)
 
-  const existingAssetIds    = new Set((currentProject.assets ?? []).map(a => a.id))
-  const assetsToAdd         = m.assets.filter(a => !existingAssetIds.has(a.id))
+  const existingAssetIds = new Set((currentProject.assets ?? []).map(a => a.id))
+  const assetsToAdd      = m.assets.filter(a => !existingAssetIds.has(a.id))
 
-  // Derive canvas nodes for newly-added pinned assets
   const mergedEntityIds = new Set([
     ...existingEntityIds,
     ...remappedNodes.map(n => (n as any).id as string),
   ])
-  const newAssetCanvasNodes: Record<string, unknown>[] = assetsToAdd
-    .filter(a => a.isPinnedOnCanvas && a.position)
+
+  // Derive canvas nodes for newly-added pinned attachment assets
+  const newAttachmentCanvasNodes: Record<string, unknown>[] = assetsToAdd
+    .filter((a): a is AttachmentAsset => a.kind === 'attachment' && a.isPinnedOnCanvas && !!a.position)
     .map(a => {
-      const entries = a.entries ?? []
-      const summary = entries.slice(0, 3).map(e => e.label || e.type).join(', ')
+      const summary = a.entries.slice(0, 3).map(e => e.label || e.type).join(', ')
       return {
         id: `asset-node-${a.id}`,
         type: 'asset',
         position: a.position!,
-        data: { assetId: a.id, title: a.title, entryCount: entries.length, entrySummary: summary },
+        data: { assetId: a.id, title: a.title, entryCount: a.entries.length, entrySummary: summary },
       }
     })
+
   const newTetherEdges: Record<string, unknown>[] = assetsToAdd
-    .filter(a => a.isPinnedOnCanvas)
+    .filter((a): a is AttachmentAsset => a.kind === 'attachment' && a.isPinnedOnCanvas)
     .flatMap(a =>
       a.linkedEntityIds
         .filter(eid => mergedEntityIds.has(eid))
@@ -845,25 +977,26 @@ export function mergeIntoProject(
         }))
     )
 
-  const existingCanvasImageIds = new Set((currentProject.canvasImages ?? []).map(c => c.id))
-  const canvasImagesToAdd      = m.canvasImages.filter(c => !existingCanvasImageIds.has(c.id))
-  const newCanvasImageNodes: Record<string, unknown>[] = canvasImagesToAdd.map(ci => ({
-    id: `canvas-img-${ci.id}`,
-    type: 'canvas-image',
-    position: { x: ci.x, y: ci.y },
-    draggable: !ci.locked,
-    selectable: true,
-    data: {
-      canvasImageId: ci.id,
-      title: ci.title,
-      imageUrl: ci.imageUrl,
-      width: ci.width,
-      height: ci.height,
-      rotation: ci.rotation ?? 0,
-      opacity: ci.opacity ?? 1,
-      locked: ci.locked ?? false,
-    },
-  }))
+  // Canvas image nodes for newly-added canvas image assets
+  const newCanvasImageNodes: Record<string, unknown>[] = assetsToAdd
+    .filter((a): a is CanvasImageAsset => a.kind === 'canvas-image')
+    .map(ci => ({
+      id: `canvas-img-${ci.id}`,
+      type: 'canvas-image',
+      position: ci.position ?? { x: 0, y: 0 },
+      draggable: !ci.locked,
+      selectable: true,
+      data: {
+        canvasImageId: ci.id,
+        title: ci.title,
+        imageUrl: ci.imageUrl,
+        width: ci.width,
+        height: ci.height,
+        rotation: ci.rotation ?? 0,
+        opacity: ci.opacity ?? 1,
+        locked: ci.locked ?? false,
+      },
+    }))
 
   const project: ProjectData = {
     ...currentProject,
@@ -872,7 +1005,7 @@ export function mergeIntoProject(
       nodes: [
         ...(currentProject.graph.nodes as any[]),
         ...remappedNodes,
-        ...newAssetCanvasNodes,
+        ...newAttachmentCanvasNodes,
         ...newCanvasImageNodes,
       ],
       edges: [
@@ -885,7 +1018,6 @@ export function mergeIntoProject(
     relSchema: relResult.merged,
     conceptSchema: conceptResult.merged,
     assets: [...(currentProject.assets ?? []), ...assetsToAdd],
-    canvasImages: [...(currentProject.canvasImages ?? []), ...canvasImagesToAdd],
   }
 
   const report: MergeReport = {

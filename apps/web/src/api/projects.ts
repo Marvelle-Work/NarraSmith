@@ -57,7 +57,6 @@ export async function syncProjectData(
     relSchema: ProjectData['relSchema']
     conceptSchema: ProjectData['conceptSchema']
     assets?: ProjectData['assets']
-    canvasImages?: ProjectData['canvasImages']
   },
   version: number,
 ): Promise<{ version: number }> {

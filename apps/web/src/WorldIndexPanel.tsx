@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react'
 import type { Edge } from '@xyflow/react'
-import type { GraphNode, AssetData, CanvasImage } from './types'
+import type { GraphNode, Asset, AttachmentAsset, CanvasImageAsset, NotebookAsset } from './types'
 import type { ConceptSchemaType } from './conceptSchema'
 import { SIZE_LEVELS } from './types'
 
@@ -8,16 +8,19 @@ type Props = {
   nodes: GraphNode[]
   edges: Edge[]
   conceptSchemas: ConceptSchemaType[]
-  assets: AssetData[]
-  canvasImages: CanvasImage[]
+  assets: Asset[]
   onSelectNode: (id: string) => void
   onSelectEdge: (id: string) => void
   onToggleAssetPin: (id: string) => void
   onFocusCanvasImage: (id: string) => void
+  onOpenNotebook?: (id: string) => void
   onClose: () => void
 }
 
-export function WorldIndexPanel({ nodes, edges, conceptSchemas, assets, canvasImages, onSelectNode, onSelectEdge, onToggleAssetPin, onFocusCanvasImage, onClose }: Props) {
+export function WorldIndexPanel({ nodes, edges, conceptSchemas, assets, onSelectNode, onSelectEdge, onToggleAssetPin, onFocusCanvasImage, onOpenNotebook, onClose }: Props) {
+  const attachmentAssets = assets.filter((a): a is AttachmentAsset => a.kind === 'attachment')
+  const canvasImageAssets = assets.filter((a): a is CanvasImageAsset => a.kind === 'canvas-image')
+  const notebookAssets = assets.filter((a): a is NotebookAsset => a.kind === 'notebook')
   const [search, setSearch] = useState('')
   const [collapsed, setCollapsed] = useState<Record<string, boolean>>({})
 
@@ -95,10 +98,10 @@ export function WorldIndexPanel({ nodes, edges, conceptSchemas, assets, canvasIm
 
   const totalConcepts = conceptGroups.reduce((sum, g) => sum + g.items.length, 0)
 
-  // ── Assets ────────────────────────────────────────────────────────────
+  // ── Attachment assets ─────────────────────────────────────────────────
   const assetGroups = useMemo(() => {
     const nameOf = (id: string) => nodes.find(n => n.id === id)?.data.label ?? id
-    const filtered = assets.filter(a =>
+    const filtered = attachmentAssets.filter(a =>
       !q
       || a.title.toLowerCase().includes(q)
       || a.entries.some(e => e.label.toLowerCase().includes(q))
@@ -108,16 +111,16 @@ export function WorldIndexPanel({ nodes, edges, conceptSchemas, assets, canvasIm
     const linked = filtered.filter(a => !a.isPinnedOnCanvas && a.linkedEntityIds.length > 0)
     const unlinked = filtered.filter(a => !a.isPinnedOnCanvas && a.linkedEntityIds.length === 0)
     return { pinned, linked, unlinked }
-  }, [assets, nodes, q])
+  }, [attachmentAssets, nodes, q])
 
   const totalAssets = assetGroups.pinned.length + assetGroups.linked.length + assetGroups.unlinked.length
 
-  // ── Canvas Images ─────────────────────────────────────────────────────
+  // ── Canvas images ─────────────────────────────────────────────────────
   const filteredCanvasImages = useMemo(() => {
-    return canvasImages.filter(ci =>
+    return canvasImageAssets.filter(ci =>
       !q || ci.title.toLowerCase().includes(q),
     )
-  }, [canvasImages, q])
+  }, [canvasImageAssets, q])
 
   return (
     <div
@@ -282,8 +285,32 @@ export function WorldIndexPanel({ nodes, edges, conceptSchemas, assets, canvasIm
             }
           </IndexSection>
 
+          {/* ── Notebooks ── */}
+          {notebookAssets.length > 0 && (
+            <IndexSection
+              label="Notebooks" count={notebookAssets.filter(n =>
+                !q || n.title.toLowerCase().includes(q)).length}
+              open={isOpen('notebooks')} onToggle={() => toggle('notebooks')}
+            >
+              {notebookAssets
+                .filter(n => !q || n.title.toLowerCase().includes(q))
+                .map(n => (
+                  <IndexRow key={n.id} onClick={() => onOpenNotebook?.(n.id)}>
+                    <span style={{ fontSize: 13, flexShrink: 0 }}>📓</span>
+                    <span style={{ fontWeight: 600, color: '#18181b', flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                      {n.title}
+                    </span>
+                    <span style={{ fontSize: 11, color: '#a1a1aa', flexShrink: 0 }}>
+                      {n.documents.length} doc{n.documents.length !== 1 ? 's' : ''}
+                    </span>
+                  </IndexRow>
+                ))
+              }
+            </IndexSection>
+          )}
+
           {/* ── Canvas Images ── */}
-          {canvasImages.length > 0 && (
+          {canvasImageAssets.length > 0 && (
             <IndexSection
               label="Canvas Images" count={filteredCanvasImages.length}
               open={isOpen('canvas-images')} onToggle={() => toggle('canvas-images')}
@@ -304,7 +331,7 @@ export function WorldIndexPanel({ nodes, edges, conceptSchemas, assets, canvasIm
           )}
 
           {/* Global empty state */}
-          {nodes.length === 0 && edges.length === 0 && assets.length === 0 && canvasImages.length === 0 && (
+          {nodes.length === 0 && edges.length === 0 && assets.length === 0 && (
             <div style={{ padding: '48px 0', textAlign: 'center', color: '#a1a1aa', fontSize: 14 }}>
               Your world is empty — add entities to get started
             </div>
@@ -403,7 +430,7 @@ function EmptyRow({ text }: { text: string }) {
   )
 }
 
-function AssetRow({ asset, nodes, onTogglePin }: { asset: AssetData; nodes: GraphNode[]; onTogglePin: (id: string) => void }) {
+function AssetRow({ asset, nodes, onTogglePin }: { asset: AttachmentAsset; nodes: GraphNode[]; onTogglePin: (id: string) => void }) {
   const entrySummary = asset.entries.slice(0, 3).map(e => e.label || e.type).join(', ')
   const linkedNames = asset.linkedEntityIds
     .map(eid => nodes.find(n => n.id === eid)?.data.label)

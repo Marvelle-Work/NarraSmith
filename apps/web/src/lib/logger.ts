@@ -16,7 +16,7 @@ export const LOG_CATEGORIES = [
   'TEMPLATE', 'WORLD', 'PAGE', 'GRAPH',
   'STORE', 'IMPORT', 'EXPORT', 'SYNC',
   'DATABASE', 'API', 'UI', 'REACTFLOW',
-  'RENDER', 'NETWORK', 'PERFORMANCE',
+  'RENDER', 'NETWORK', 'PERFORMANCE', 'INSPECTOR', 'NOTEBOOK',
 ] as const
 export type LogCategory = (typeof LOG_CATEGORIES)[number]
 

@@ -2,7 +2,7 @@ import { DEFAULT_SCHEMA_TYPES, type SchemaType, uid } from './schema'
 import { DEFAULT_RELATIONSHIP_TYPES, type RelationshipType } from './relationshipSchema'
 import { DEFAULT_CONCEPT_SCHEMAS, type ConceptSchemaType } from './conceptSchema'
 import type { ProjectTemplate } from './templates'
-import type { AssetData, CanvasImage } from './types'
+import type { Asset, AttachmentAsset, CanvasImageAsset } from './types'
 
 // ── Types ───────────────────────────────────────────────────────────────
 
@@ -21,8 +21,7 @@ export type ProjectData = {
   entitySchema: SchemaType[]
   relSchema: RelationshipType[]
   conceptSchema: ConceptSchemaType[]
-  assets: AssetData[]
-  canvasImages: CanvasImage[]
+  assets: Asset[]
 }
 
 export type ProjectStore = {
@@ -35,8 +34,6 @@ export type ProjectStore = {
 
 const STORE_KEY = 'narrasmith-projects'
 
-// Legacy flat keys written by the pre-Phase-2 implementation.
-// Read once during migration, then removed.
 const LEGACY_GRAPH_KEY      = 'narrasmith-graph'
 const LEGACY_SCHEMA_KEY     = 'narrasmith-schema'
 const LEGACY_REL_SCHEMA_KEY = 'narrasmith-relationship-schema'
@@ -55,7 +52,6 @@ export function makeDefaultProject(id?: string, name = 'My World'): ProjectData 
     relSchema: DEFAULT_RELATIONSHIP_TYPES,
     conceptSchema: DEFAULT_CONCEPT_SCHEMAS,
     assets: [],
-    canvasImages: [],
   }
 }
 
@@ -69,8 +65,6 @@ export function getActiveProject(store: ProjectStore): ProjectData {
 
 // ── Migration ───────────────────────────────────────────────────────────
 
-// One-time migration from the pre-Phase-2 flat localStorage keys into the
-// project-scoped structure. Returns null if no legacy data exists.
 function migrateFromLegacy(): ProjectStore | null {
   const rawGraph      = localStorage.getItem(LEGACY_GRAPH_KEY)
   const rawSchema     = localStorage.getItem(LEGACY_SCHEMA_KEY)
@@ -90,18 +84,38 @@ function migrateFromLegacy(): ProjectStore | null {
   }
 }
 
-function migrateAsset(a: any): AssetData {
-  if (Array.isArray(a.entries)) return a as AssetData
+// Migrate one old AssetData entry (pre-entries format) to an AttachmentAsset entry list.
+function migrateOldAssetEntry(a: any): AttachmentAsset {
+  const now = new Date().toISOString()
+  if (Array.isArray(a.entries)) {
+    return {
+      id: a.id,
+      kind: 'attachment',
+      title: a.title ?? 'Untitled',
+      tags: [],
+      createdAt: now,
+      updatedAt: now,
+      linkedEntityIds: a.linkedEntityIds ?? [],
+      isPinnedOnCanvas: a.isPinnedOnCanvas ?? false,
+      position: a.position,
+      entries: a.entries,
+    }
+  }
+  // Very old format: single url/assetType
   const entryType = ({ audio: 'music', note: 'custom' } as Record<string, string>)[a.assetType] ?? a.assetType ?? 'link'
   return {
     id: a.id,
+    kind: 'attachment',
     title: a.title ?? 'Untitled',
+    tags: [],
+    createdAt: now,
+    updatedAt: now,
     linkedEntityIds: a.linkedEntityIds ?? [],
     isPinnedOnCanvas: a.isPinnedOnCanvas ?? false,
     position: a.position,
     entries: a.url ? [{
       id: `entry-migrated-${a.id}`,
-      type: entryType as AssetData['entries'][number]['type'],
+      type: entryType as AttachmentAsset['entries'][number]['type'],
       label: a.title ?? '',
       value: a.url,
       isLinkified: /^https?:\/\//.test(a.url),
@@ -109,13 +123,53 @@ function migrateAsset(a: any): AssetData {
   }
 }
 
+// Normalize the assets array for any project-shaped object (raw cloud data or local store).
+// Handles: old AssetData[] without `kind` → AttachmentAsset, and legacy canvasImages field.
+// Pure — does not mutate the input; caller is responsible for deleting legacy.canvasImages.
+export function normalizeProjectAssets(p: ProjectData): Asset[] {
+  const now = new Date().toISOString()
+  const legacy = p as any
+  const rawAssets: any[] = legacy.assets ? (legacy.assets as any[]) : []
+
+  let assets: Asset[] = rawAssets.map((a: any): Asset => {
+    if (a.kind) return a as Asset
+    return migrateOldAssetEntry(a)
+  })
+
+  if (legacy.canvasImages && Array.isArray(legacy.canvasImages)) {
+    const existingIds = new Set(assets.map(a => a.id))
+    const migrated: CanvasImageAsset[] = (legacy.canvasImages as any[])
+      .filter((ci: any) => !existingIds.has(ci.id))
+      .map((ci: any): CanvasImageAsset => ({
+        id: ci.id,
+        kind: 'canvas-image',
+        title: ci.title ?? 'Untitled Image',
+        tags: [],
+        createdAt: now,
+        updatedAt: now,
+        linkedEntityIds: [],
+        isPinnedOnCanvas: true,
+        position: { x: ci.x ?? 0, y: ci.y ?? 0 },
+        imageUrl: ci.imageUrl ?? '',
+        width: ci.width ?? 400,
+        height: ci.height ?? 300,
+        rotation: ci.rotation ?? 0,
+        opacity: ci.opacity ?? 1,
+        locked: ci.locked ?? false,
+        zIndex: ci.zIndex ?? 0,
+      }))
+    assets = [...assets, ...migrated]
+  }
+
+  return assets
+}
+
 function normalizeStore(store: ProjectStore): ProjectStore {
   for (const p of Object.values(store.projects)) {
     if (!p.conceptSchema) p.conceptSchema = DEFAULT_CONCEPT_SCHEMAS
-    if (!p.assets) p.assets = []
-    else p.assets = p.assets.map(migrateAsset)
-    if (!p.canvasImages) p.canvasImages = []
     if (!p.updatedAt) p.updatedAt = p.createdAt
+    p.assets = normalizeProjectAssets(p)
+    delete (p as any).canvasImages
   }
   return store
 }
@@ -123,13 +177,11 @@ function normalizeStore(store: ProjectStore): ProjectStore {
 // ── Public API ───────────────────────────────────────────────────────────
 
 export function loadProjectStore(): ProjectStore {
-  // 1. Try reading the new unified store.
   try {
     const raw = localStorage.getItem(STORE_KEY)
     if (raw) return normalizeStore(JSON.parse(raw) as ProjectStore)
   } catch {}
 
-  // 2. Try migrating from legacy flat keys (existing users).
   const migrated = migrateFromLegacy()
   if (migrated) {
     saveProjectStore(migrated)
@@ -139,7 +191,6 @@ export function loadProjectStore(): ProjectStore {
     return migrated
   }
 
-  // 3. Brand-new user — return an empty default store (no save yet).
   const defaultProject = makeDefaultProject()
   return {
     version: 1,
@@ -229,7 +280,6 @@ export function createProjectFromTemplate(store: ProjectStore, template: Project
     relSchema: JSON.parse(JSON.stringify(template.relSchema)),
     conceptSchema: JSON.parse(JSON.stringify(template.conceptSchema)),
     assets: JSON.parse(JSON.stringify(template.assets ?? [])),
-    canvasImages: JSON.parse(JSON.stringify(template.canvasImages ?? [])),
   }
   return {
     ...store,

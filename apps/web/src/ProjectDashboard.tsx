@@ -142,7 +142,6 @@ export function ProjectDashboard({ onOpenProject }: Props) {
           relSchema: projectData.relSchema,
           conceptSchema: projectData.conceptSchema,
           assets: projectData.assets,
-          canvasImages: projectData.canvasImages,
         },
         0,
       )

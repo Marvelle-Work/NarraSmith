@@ -4,7 +4,7 @@ import { DEFAULT_CONCEPT_SCHEMAS } from './conceptSchema'
 import type { SchemaType } from './schema'
 import type { RelationshipType } from './relationshipSchema'
 import type { ConceptSchemaType } from './conceptSchema'
-import type { AssetData, CanvasImage } from './types'
+import type { Asset } from './types'
 import type { ProjectGraph } from './projectStore'
 
 export type ProjectTemplate = {
@@ -15,8 +15,7 @@ export type ProjectTemplate = {
   relSchema: RelationshipType[]
   conceptSchema: ConceptSchemaType[]
   graph: ProjectGraph
-  assets?: AssetData[]
-  canvasImages?: CanvasImage[]
+  assets?: Asset[]
 }
 
 // ── Blank World ─────────────────────────────────────────────────────────

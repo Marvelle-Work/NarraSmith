@@ -1,12 +1,12 @@
 import { useState, useMemo } from 'react'
-import type { AssetData, AssetEntry, AssetEntryType, GraphNode } from './types'
+import type { AttachmentAsset, AssetEntry, AssetEntryType, GraphNode } from './types'
 import { isUrl } from './types'
 import { PlayButton } from './PlayButton'
 
 type Props = {
-  assets: AssetData[]
+  assets: AttachmentAsset[]
   nodes: GraphNode[]
-  onUpdate: (asset: AssetData) => void
+  onUpdate: (asset: AttachmentAsset) => void
   onRemove: (assetId: string) => void
   onTogglePin: (assetId: string) => void
   onClose: () => void
@@ -45,14 +45,14 @@ export function AssetIndexPanel({ assets, nodes, onUpdate, onRemove, onTogglePin
   const linked = filtered.filter(a => !a.isPinnedOnCanvas && a.linkedEntityIds.length > 0)
   const unlinked = filtered.filter(a => !a.isPinnedOnCanvas && a.linkedEntityIds.length === 0)
 
-  const addEntry = (asset: AssetData, type: AssetEntryType) => {
+  const addEntry = (asset: AttachmentAsset, type: AssetEntryType) => {
     onUpdate({
       ...asset,
       entries: [...asset.entries, { id: entryId(), type, label: '', value: '', isLinkified: false }],
     })
   }
 
-  const updateEntry = (asset: AssetData, eid: string, updates: Partial<AssetEntry>) => {
+  const updateEntry = (asset: AttachmentAsset, eid: string, updates: Partial<AssetEntry>) => {
     onUpdate({
       ...asset,
       entries: asset.entries.map(e => {
@@ -64,11 +64,11 @@ export function AssetIndexPanel({ assets, nodes, onUpdate, onRemove, onTogglePin
     })
   }
 
-  const removeEntry = (asset: AssetData, eid: string) => {
+  const removeEntry = (asset: AttachmentAsset, eid: string) => {
     onUpdate({ ...asset, entries: asset.entries.filter(e => e.id !== eid) })
   }
 
-  function renderGroup(label: string, items: AssetData[]) {
+  function renderGroup(label: string, items: AttachmentAsset[]) {
     if (items.length === 0) return null
     return (
       <div>

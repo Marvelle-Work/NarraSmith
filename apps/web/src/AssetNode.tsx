@@ -4,14 +4,21 @@ import type { AssetNodeData } from './types'
 type AssetGraphNode = Node<AssetNodeData>
 
 export function AssetNode({ data, selected }: NodeProps<AssetGraphNode>) {
+  const isNotebook = data.kind === 'notebook'
+
+  const accentColor = isNotebook ? '#8b5cf6' : '#6366f1'
+  const badgeLabel  = isNotebook ? 'NOTEBOOK' : 'ASSET'
+  const badgeBg     = isNotebook ? '#ede9fe' : '#ede9fe'
+  const icon        = isNotebook ? '📓' : null
+
   return (
     <div style={{
       width: 130,
       background: '#fff',
-      border: `2px solid ${selected ? '#6366f1' : '#d4d4d8'}`,
+      border: `2px solid ${selected ? accentColor : '#d4d4d8'}`,
       borderRadius: 8,
       boxShadow: selected
-        ? '0 0 0 3px rgba(99,102,241,0.2), 0 4px 14px rgba(0,0,0,0.1)'
+        ? `0 0 0 3px ${accentColor}33, 0 4px 14px rgba(0,0,0,0.1)`
         : '0 2px 8px rgba(0,0,0,0.08)',
       padding: '10px 12px',
       cursor: 'grab',
@@ -19,12 +26,13 @@ export function AssetNode({ data, selected }: NodeProps<AssetGraphNode>) {
       transition: 'box-shadow 0.15s, border-color 0.15s',
     }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 4 }}>
+        {icon && <span style={{ fontSize: 12, lineHeight: 1 }}>{icon}</span>}
         <span style={{
-          fontSize: 9, fontWeight: 700, color: '#6366f1',
-          background: '#ede9fe', padding: '2px 5px', borderRadius: 4,
+          fontSize: 9, fontWeight: 700, color: accentColor,
+          background: badgeBg, padding: '2px 5px', borderRadius: 4,
           textTransform: 'uppercase', letterSpacing: 0.5,
         }}>
-          ASSET
+          {badgeLabel}
         </span>
       </div>
       <div style={{
@@ -39,14 +47,24 @@ export function AssetNode({ data, selected }: NodeProps<AssetGraphNode>) {
         {data.title}
       </div>
       <div style={{ fontSize: 10, color: '#a1a1aa' }}>
-        {data.entryCount} {data.entryCount === 1 ? 'entry' : 'entries'}
+        {isNotebook
+          ? `${data.entryCount} doc${data.entryCount !== 1 ? 's' : ''}`
+          : `${data.entryCount} ${data.entryCount === 1 ? 'entry' : 'entries'}`}
       </div>
+      {isNotebook && (
+        <div style={{
+          marginTop: 5, fontSize: 9, color: accentColor,
+          fontWeight: 600, letterSpacing: 0.3, opacity: 0.7,
+        }}>
+          double-click to open
+        </div>
+      )}
 
       {/* Hidden handles for tether edge rendering — not user-interactive */}
-      <Handle type="source" id="north" position={Position.Top} isConnectableStart={false} style={hiddenHandle} />
-      <Handle type="source" id="east" position={Position.Right} isConnectableStart={false} style={hiddenHandle} />
+      <Handle type="source" id="north" position={Position.Top}    isConnectableStart={false} style={hiddenHandle} />
+      <Handle type="source" id="east"  position={Position.Right}  isConnectableStart={false} style={hiddenHandle} />
       <Handle type="source" id="south" position={Position.Bottom} isConnectableStart={false} style={hiddenHandle} />
-      <Handle type="source" id="west" position={Position.Left} isConnectableStart={false} style={hiddenHandle} />
+      <Handle type="source" id="west"  position={Position.Left}   isConnectableStart={false} style={hiddenHandle} />
     </div>
   )
 }
