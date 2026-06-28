@@ -2,7 +2,12 @@ import 'dotenv/config'
 
 function required(key: string): string {
   const value = process.env[key]
-  if (!value) throw new Error(`Missing required env var: ${key}`)
+  if (!value) {
+    // Use console.error so this is visible even before process handlers register.
+    console.error(`💥 FATAL: Missing required env var: ${key}`)
+    console.error('Set this variable in Railway → Variables before deploying.')
+    throw new Error(`Missing required env var: ${key}`)
+  }
   return value
 }
 

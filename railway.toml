@@ -1,0 +1,11 @@
+[build]
+# Build shared-types first (backend tsconfig references it), then compile backend
+buildCommand = "npm install && npm --workspace=@narrasmith/shared-types run build && npm --workspace=backend run build"
+
+[deploy]
+# Use entry.ts (compiled to entry.js) so crash handlers register before any imports
+startCommand = "node backend/dist/entry.js"
+healthcheckPath = "/health"
+healthcheckTimeout = 30
+restartPolicyType = "on_failure"
+restartPolicyMaxRetries = 3
