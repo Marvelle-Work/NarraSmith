@@ -10,6 +10,7 @@ import { ExportModal } from './ExportModal'
 import { ProjectTemplateModal } from './ProjectTemplateModal'
 import type { ProjectTemplate } from './templates'
 import * as api from './api/projects'
+import { buildCanonicalState } from './lib/canonicalState'
 import { logger } from './lib/logger'
 import { resetPipeline, startStage, completeStage, addMismatchAlerts } from './lib/diagnostics'
 import { Trace, detectMismatches } from './lib/trace'
@@ -133,19 +134,9 @@ export function ProjectDashboard({ onOpenProject }: Props) {
       addMismatchAlerts(storeAlerts)
 
       startStage('Store')
-      logger.time('SYNC_TEMPLATE')
-      await api.syncProjectData(
-        meta.id,
-        {
-          graph: projectData.graph,
-          entitySchema: projectData.entitySchema,
-          relSchema: projectData.relSchema,
-          conceptSchema: projectData.conceptSchema,
-          assets: projectData.assets,
-        },
-        0,
-      )
-      logger.timeEnd('SYNC_TEMPLATE')
+      logger.time('CANONICAL_TEMPLATE')
+      await api.saveCanonicalState(meta.id, buildCanonicalState({ ...projectData, id: meta.id }), 0)
+      logger.timeEnd('CANONICAL_TEMPLATE')
 
       completeStage('Store',
         storeAlerts.some(a => a.severity === 'error') ? 'error'

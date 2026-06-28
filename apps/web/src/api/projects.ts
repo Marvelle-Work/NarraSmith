@@ -50,23 +50,6 @@ export async function saveProjectData(
   })
 }
 
-export async function syncProjectData(
-  id: string,
-  data: {
-    graph: ProjectData['graph']
-    entitySchema: ProjectData['entitySchema']
-    relSchema: ProjectData['relSchema']
-    conceptSchema: ProjectData['conceptSchema']
-    assets?: ProjectData['assets']
-  },
-  version: number,
-): Promise<{ version: number }> {
-  return apiFetch<{ version: number }>(`/projects/${id}/sync`, {
-    method: 'PUT',
-    body: JSON.stringify({ ...data, version }),
-  })
-}
-
 export async function saveCanonicalState(
   id: string,
   state: CanonicalProjectState,
