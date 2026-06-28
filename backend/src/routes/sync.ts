@@ -72,8 +72,15 @@ type SyncBody = {
   }>
   assets?: Array<{
     id: string
+    kind?: string
     title: string
+    description?: string
+    tags?: string[]
+    createdAt?: string
+    updatedAt?: string
     entries?: unknown[]
+    documents?: unknown[]
+    activeDocumentId?: string
     linkedEntityIds?: string[]
     isPinnedOnCanvas?: boolean
     position?: { x: number; y: number }
@@ -101,6 +108,21 @@ export default async function syncRoutes(app: FastifyInstance) {
   }>('/sync', async (req, reply) => {
     const { projectId } = req.params
     const { graph, entitySchema, relSchema, conceptSchema, assets, canvasImages, version } = req.body
+
+    // ── Separate notebooks from relational-table assets ────────────────
+    // Notebooks are not stored in asset_nodes (no kind/documents columns).
+    // They are injected directly into the project_data snapshot blob and
+    // re-sent by the client on every sync, so the blob stays authoritative.
+    const notebookAssets = (assets ?? []).filter(a => a.kind === 'notebook')
+    const attachmentAssets = (assets ?? []).filter(a => a.kind !== 'notebook')
+
+    req.log.info({
+      projectId,
+      totalAssets: (assets ?? []).length,
+      attachmentCount: attachmentAssets.length,
+      notebookCount: notebookAssets.length,
+      notebookIds: notebookAssets.map(n => n.id),
+    }, '[SYNC] Received assets — notebook trace')
 
     // ── Optimistic concurrency check ─────────────────────────────────
     const { data: project } = await db
@@ -230,9 +252,9 @@ export default async function syncRoutes(app: FastifyInstance) {
         if (error) throw new Error(`concept_types upsert failed: ${error.message}`)
       }
 
-      // ── 3b. Upsert asset_nodes ─────────────────────────────────────
-      if (assets && assets.length > 0) {
-        const rows = assets.map(a => ({
+      // ── 3b. Upsert asset_nodes (attachments only — notebooks are blob-stored)
+      if (attachmentAssets.length > 0) {
+        const rows = attachmentAssets.map(a => ({
           id: existingAssetNodeByClientId.get(a.id) ?? crypto.randomUUID(),
           client_id: a.id,
           project_id: projectId,
@@ -250,6 +272,16 @@ export default async function syncRoutes(app: FastifyInstance) {
           .upsert(rows, { onConflict: 'project_id,client_id' })
 
         if (error) throw new Error(`asset_nodes upsert failed: ${error.message}`)
+      }
+
+      // If notebooks previously leaked into asset_nodes (before this fix), purge them.
+      for (const nb of notebookAssets) {
+        const staleUuid = existingAssetNodeByClientId.get(nb.id)
+        if (staleUuid) {
+          req.log.warn({ notebookId: nb.id, staleUuid }, '[SYNC] Removing stale notebook row from asset_nodes')
+          await db.from('asset_nodes').delete().eq('id', staleUuid)
+          existingAssetNodeByClientId.delete(nb.id)
+        }
       }
 
       // ── 3c. Upsert canvas_images ───────────────────────────────────
@@ -393,9 +425,10 @@ export default async function syncRoutes(app: FastifyInstance) {
       const incomingNodeTypeClientIds = new Set(entitySchema.map(s => s.id))
       const incomingRelTypeClientIds = new Set(relSchema.map(s => s.id))
       const incomingConceptClientIds = new Set(conceptSchema.map(s => s.id))
-      // Only delete assets/canvas-images if they were explicitly provided in the sync body.
-      // If undefined, the client didn't send them — preserve existing records.
-      const incomingAssetClientIds = assets ? new Set(assets.map(a => a.id)) : null
+      // Only delete attachments if they were explicitly provided in the sync body.
+      // Notebooks are never in asset_nodes, so we track only attachment IDs here.
+      // If assets is undefined, the client didn't send them — preserve existing records.
+      const incomingAssetClientIds = assets ? new Set(attachmentAssets.map(a => a.id)) : null
       const incomingCanvasImageClientIds = canvasImages ? new Set(canvasImages.map(ci => ci.id)) : null
 
       const relsToDelete = [...existingRelByClientId.entries()]
@@ -448,6 +481,40 @@ export default async function syncRoutes(app: FastifyInstance) {
 
       // ── 8. Rebuild snapshot and update project ───────────────────────
       const snapshot = await rebuildProjectSnapshot(projectId)
+
+      req.log.info({
+        snapshotAssetCount: (snapshot.assets as unknown[]).length,
+        notebookCount: notebookAssets.length,
+      }, '[SYNC] Snapshot built — injecting notebooks')
+
+      // Inject notebooks into the snapshot blob.
+      // asset_nodes has no kind/documents columns, so notebooks bypass the
+      // relational tables entirely and live only in project_data.
+      // The client always re-sends the full notebook list on every sync.
+      if (notebookAssets.length > 0) {
+        const now = new Date().toISOString()
+        const notebookRecords = notebookAssets.map(n => ({
+          id: n.id,
+          kind: 'notebook',
+          title: n.title,
+          ...(n.description != null && { description: n.description }),
+          tags: n.tags ?? [],
+          createdAt: n.createdAt ?? now,
+          updatedAt: n.updatedAt ?? now,
+          linkedEntityIds: n.linkedEntityIds ?? [],
+          isPinnedOnCanvas: n.isPinnedOnCanvas ?? false,
+          ...(n.position != null && { position: n.position }),
+          documents: n.documents ?? [],
+          ...(n.activeDocumentId != null && { activeDocumentId: n.activeDocumentId }),
+        }));
+        (snapshot.assets as unknown[]).push(...notebookRecords)
+
+        req.log.info({
+          notebookIds: notebookRecords.map(n => n.id),
+          totalSnapshotAssets: (snapshot.assets as unknown[]).length,
+        }, '[SYNC] Notebooks injected into snapshot')
+      }
+
       const newVersion = (version ?? 0) + 1
 
       const { error: updateErr } = await db
@@ -460,6 +527,8 @@ export default async function syncRoutes(app: FastifyInstance) {
         .eq('id', projectId)
 
       if (updateErr) throw new Error(`project update failed: ${updateErr.message}`)
+
+      req.log.info({ projectId, newVersion, notebookCount: notebookAssets.length }, '[SYNC] project_data written')
 
       return { version: newVersion }
     } catch (err) {

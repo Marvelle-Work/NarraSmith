@@ -318,6 +318,14 @@ export function GraphEditor({ projectId, onBackToDashboard }: GraphEditorProps) 
           // Normalize assets from cloud (may be pre-v2 format without `kind`, or have
           // old separate canvasImages field) before applying to state or persisting.
           const cloudAssets = normalizeProjectAssets(cloudData)
+          const cloudNotebooks = cloudAssets.filter(a => a.kind === 'notebook')
+          logger.info('NOTEBOOK', 'Cloud hydration — notebook trace', {
+            rawAssetCount: (cloudData.assets as unknown[] | undefined)?.length ?? 0,
+            normalizedAssetCount: cloudAssets.length,
+            notebookCount: cloudNotebooks.length,
+            notebookIds: cloudNotebooks.map(a => a.id),
+          })
+
           const normalizedCloudProject = { ...cloudData, assets: cloudAssets }
           delete (normalizedCloudProject as any).canvasImages
 
@@ -507,6 +515,14 @@ export function GraphEditor({ projectId, onBackToDashboard }: GraphEditorProps) 
     storeRef.current = next  // always current — export reads from here
 
     if (!cloudLoadedRef.current) return  // guard only the persistence layer
+
+    const notebooksInState = syncedAssets.filter(a => a.kind === 'notebook')
+    logger.debug('NOTEBOOK', 'Pre-save state', {
+      totalAssets: syncedAssets.length,
+      notebookCount: notebooksInState.length,
+      notebookIds: notebooksInState.map(a => a.id),
+    })
+
     autoSave(next)
   }, [nodes, edges, schemaTypes, relTypes, conceptSchema, assets, rootNodeId, projectName]) // eslint-disable-line react-hooks/exhaustive-deps
 

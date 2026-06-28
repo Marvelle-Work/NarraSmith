@@ -27,6 +27,15 @@ export function useAutoSave(projectId: string, delay = 2000) {
 
       savingRef.current = true
       try {
+        const allAssets = data.assets ?? []
+        const notebooks = allAssets.filter(a => a.kind === 'notebook')
+        logger.info('SYNC', 'Sending sync payload', {
+          projectId,
+          totalAssets: allAssets.length,
+          notebookCount: notebooks.length,
+          notebookIds: notebooks.map(n => n.id),
+        })
+
         const { version } = await syncProjectData(
           projectId,
           {
@@ -39,7 +48,7 @@ export function useAutoSave(projectId: string, delay = 2000) {
           versionRef.current,
         )
         versionRef.current = version
-        logger.debug('SYNC', 'Cloud sync completed', { projectId, version })
+        logger.debug('SYNC', 'Cloud sync completed', { projectId, version, notebookCount: notebooks.length })
       } catch (err) {
         logger.warn('SYNC', 'Cloud sync failed — data preserved in localStorage', { err: String(err) })
       } finally {
