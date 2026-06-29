@@ -4,7 +4,7 @@ buildCommand = "npm install && npm --workspace=@narrasmith/shared-types run buil
 
 [deploy]
 # Use entry.ts (compiled to entry.js) so crash handlers register before any imports
-startCommand = "node backend/dist/entry.js"
+startCommand = "cd backend && node dist/entry.js"
 healthcheckPath = "/health"
 healthcheckTimeout = 30
 restartPolicyType = "on_failure"
