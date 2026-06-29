@@ -103,35 +103,81 @@ export default async function authRoutes(app: FastifyInstance) {
         console.log('[EMAIL_HOOK] ℹ️ No EMAIL_HOOK_SECRET — accepting unauthenticated')
       }
 
+      // Supabase "Send Email" hook payload shape (as of 2024):
+      // https://supabase.com/docs/guides/auth/auth-hooks#send-email-hook
       const body = req.body as {
-        user?: { email?: string }
-        email_data?: {
-          token_hash?: string
-          redirect_to?: string
-          verification_type?: string
+        user?: {
+          id?: string
+          email?: string
+          phone?: string
+          app_metadata?: Record<string, unknown>
+          user_metadata?: Record<string, unknown>
+          created_at?: string
         }
+        email_data?: {
+          token?: string
+          token_hash?: string
+          token_new?: string
+          token_hash_new?: string
+          redirect_to?: string
+          email_action_type?: string  // Supabase's actual field name
+          verification_type?: string  // legacy alias (may not be present)
+          site_url?: string
+        }
+        metadata?: Record<string, unknown>
       }
 
       const userEmail = body?.user?.email
       const emailData = body?.email_data
 
-      console.log('[EMAIL_HOOK] Payload:', {
-        userEmail,
-        verificationType: emailData?.verification_type,
-        hasTokenHash: !!emailData?.token_hash,
+      // Log a sanitized view of the full payload so we can see what Supabase sends.
+      console.log('[EMAIL_HOOK] Payload (sanitized):', {
+        user: {
+          id: body?.user?.id,
+          email: userEmail
+            ? userEmail.replace(/^(.{3}).*(@.*)$/, '$1…$2')
+            : undefined,
+          created_at: body?.user?.created_at,
+        },
+        email_data: {
+          email_action_type: emailData?.email_action_type,
+          verification_type: emailData?.verification_type,
+          token_hash: emailData?.token_hash
+            ? emailData.token_hash.slice(0, 8) + '…(masked)'
+            : undefined,
+          token: emailData?.token
+            ? emailData.token.slice(0, 8) + '…(masked)'
+            : undefined,
+          redirect_to: emailData?.redirect_to,
+          site_url: emailData?.site_url,
+          token_hash_new: emailData?.token_hash_new ? '(present)' : undefined,
+        },
+        metadata: body?.metadata,
       })
 
-      if (!userEmail || !emailData?.token_hash || !emailData.verification_type) {
-        console.log('[EMAIL_HOOK] ❌ Unexpected payload shape — skipping send but returning 200')
+      // email_action_type is the documented field; fall back to verification_type
+      // in case older Supabase versions use that name.
+      const actionType = emailData?.email_action_type ?? emailData?.verification_type
+      // token_hash is preferred; token is an older alias Supabase may also send
+      const tokenHash = emailData?.token_hash ?? emailData?.token
+
+      if (!userEmail || !tokenHash || !actionType) {
+        console.log('[EMAIL_HOOK] ❌ Unexpected payload shape — missing required fields', {
+          hasEmail: !!userEmail,
+          hasTokenHash: !!tokenHash,
+          hasActionType: !!actionType,
+          emailDataKeys: Object.keys(emailData ?? {}),
+          userKeys: Object.keys(body?.user ?? {}),
+        })
         return reply.code(200).send({})
       }
 
       const verifyUrl = new URL(`${env.SUPABASE_URL}/auth/v1/verify`)
-      verifyUrl.searchParams.set('token_hash', emailData.token_hash)
-      verifyUrl.searchParams.set('type', emailData.verification_type)
-      verifyUrl.searchParams.set('redirect_to', emailData.redirect_to || env.FRONTEND_URL)
+      verifyUrl.searchParams.set('token_hash', tokenHash)
+      verifyUrl.searchParams.set('type', actionType)
+      verifyUrl.searchParams.set('redirect_to', emailData?.redirect_to || emailData?.site_url || env.FRONTEND_URL)
 
-      const type = emailData.verification_type as VerificationType
+      const type = actionType as VerificationType
       const { subject, html } = emailContent(type, verifyUrl.toString())
 
       console.log('📨 RESEND SENDING', { to: userEmail, subject, type })
