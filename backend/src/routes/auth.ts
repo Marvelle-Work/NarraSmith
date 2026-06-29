@@ -1,13 +1,8 @@
 import type { FastifyInstance } from 'fastify'
 import { Resend } from 'resend'
 import { env } from '../env.js'
-import { db } from '../db.js'
 
 const resend = new Resend(env.RESEND_API_KEY)
-
-// In-memory per-email cooldown for /auth/send-verification
-const resendCooldowns = new Map<string, number>()
-const RESEND_COOLDOWN_MS = 60_000
 
 type VerificationType = 'signup' | 'recovery' | 'invite' | 'email_change' | 'magic_link'
 
@@ -35,93 +30,69 @@ function emailContent(type: VerificationType, actionUrl: string): { subject: str
 }
 
 export default async function authRoutes(app: FastifyInstance) {
-  // ── Diagnostic GET — hit this from a browser to confirm the route is live ──
-  // URL: GET https://narrasmithbackend-production.up.railway.app/auth/email-hook
-  // Expected response: { ok: true, hookSecretConfigured: true/false, ... }
+  // ── Diagnostic probe — visit in browser to confirm route is live ─────────
   app.get('/auth/email-hook', async (_req, reply) => {
-    const secret = env.EMAIL_HOOK_SECRET
-    console.log('[EMAIL_HOOK_PROBE] GET hit — Railway backend is serving this route', {
-      supabaseProject: env.SUPABASE_URL,
-      hookSecretConfigured: !!secret,
-    })
     return reply.send({
       ok: true,
-      hookSecretConfigured: !!secret,
-      hookSecretLength: secret.length,
-      hookSecretPrefix: secret ? secret.slice(0, 8) + '...' : '(not set)',
-      supabaseProject: env.SUPABASE_URL,
+      hookSecretConfigured: !!env.EMAIL_HOOK_SECRET,
       resendConfigured: !!env.RESEND_API_KEY,
+      resendFrom: env.RESEND_FROM,
       ts: new Date().toISOString(),
     })
   })
 
-  // ── Supabase "Send Email" hook ──────────────────────────────────────────
-  // Supabase calls this instead of sending emails itself.
-  // Configure: Supabase Dashboard → Authentication → Hooks → Send Email
-  // URL: {BACKEND_URL}/auth/email-hook   Secret: EMAIL_HOOK_SECRET env var value
+  // ── Supabase "Send Email" hook ────────────────────────────────────────────
+  // Canonical email path: Supabase Auth → this endpoint → Resend → inbox.
+  // Configure in: Supabase Dashboard → Auth → Hooks → Send Email
+  //   URL:    {BACKEND_URL}/auth/email-hook
+  //   Secret: leave empty (or set to match EMAIL_HOOK_SECRET in Railway)
   app.post('/auth/email-hook', async (req, reply) => {
-    // Absolute first line — no conditions, no logic, no destructuring
     console.log('🔥 EMAIL HOOK HIT')
 
-    // Dump ALL headers Supabase sends so we can see the exact auth mechanism.
-    // Mask values for headers that might carry secrets.
-    const MASKED_HEADERS = new Set(['authorization', 'x-hook-secret', 'x-api-key', 'svix-signature'])
-    const allHeaders = Object.fromEntries(
+    // Log all request headers, masking anything that looks like a credential.
+    const MASKED = new Set(['authorization', 'x-hook-secret', 'x-api-key', 'svix-signature'])
+    const headers = Object.fromEntries(
       Object.entries(req.headers).map(([k, v]) => {
         const val = Array.isArray(v) ? v.join(', ') : (v ?? '')
-        return [k, MASKED_HEADERS.has(k.toLowerCase()) ? val.slice(0, 16) + '…(masked)' : val]
+        return [k, MASKED.has(k.toLowerCase()) ? val.slice(0, 12) + '…(masked)' : val]
       }),
     )
-    console.log('[EMAIL_HOOK] 🔥 HIT', {
-      time: new Date().toISOString(),
-      allHeaders,
-      bodyKeys: Object.keys((req.body as Record<string, unknown>) ?? {}),
-    })
-    // ─────────────────────────────────────────────────────────────────────
+    console.log('[EMAIL_HOOK] headers:', headers)
 
     try {
-      const hookSecret = env.EMAIL_HOOK_SECRET
-
-      // Auth check — WARNING ONLY, never return non-2xx.
-      // Non-2xx causes Supabase to fall back to its internal email sender → rate limits.
-      // Supabase sends "Authorization: Bearer {secret}" only when the "Secret" field
-      // is populated in Dashboard → Auth → Hooks → Send Email. If that field is empty,
-      // no auth header arrives and this warning fires. Set the secret in both places to
-      // enable auth without disrupting email delivery.
-      if (hookSecret) {
-        const authHeader = (req.headers['authorization'] as string | undefined) ?? ''
-        const authorized = authHeader === `Bearer ${hookSecret}`
-        if (authorized) {
-          console.log('[EMAIL_HOOK] ✅ Auth passed')
+      // ── Auth check (warn-only) ──────────────────────────────────────────
+      // NEVER return non-2xx: Supabase falls back to its internal sender on failure → rate limits.
+      // To enable auth: populate the "Secret" field in Supabase Dashboard → Auth → Hooks → Send Email.
+      // Supabase will then send: Authorization: Bearer {secret}
+      if (env.EMAIL_HOOK_SECRET) {
+        const auth = (req.headers['authorization'] as string | undefined) ?? ''
+        if (auth === `Bearer ${env.EMAIL_HOOK_SECRET}`) {
+          console.log('[EMAIL_HOOK] auth: ✅ passed')
         } else {
-          console.warn('[EMAIL_HOOK] ⚠️ Auth mismatch — processing anyway to keep email delivery alive', {
-            receivedAuth: authHeader.slice(0, 24) || '(none)',
-            hint: 'Set "Secret" in Supabase Dashboard → Auth → Hooks → Send Email to match EMAIL_HOOK_SECRET in Railway',
+          console.warn('[EMAIL_HOOK] auth: ⚠️ mismatch — processing anyway', {
+            received: auth.slice(0, 20) || '(none)',
           })
         }
-      } else {
-        console.log('[EMAIL_HOOK] ℹ️ No EMAIL_HOOK_SECRET — accepting unauthenticated')
       }
 
-      // Supabase "Send Email" hook payload shape (as of 2024):
-      // https://supabase.com/docs/guides/auth/auth-hooks#send-email-hook
+      // ── Parse Supabase payload ──────────────────────────────────────────
+      // Supabase "Send Email" hook schema (GoTrue v2, 2024+):
+      //   { user: { id, email, ... }, email_data: { token, token_hash, redirect_to,
+      //     email_action_type, site_url, token_new, token_hash_new }, metadata: {} }
       const body = req.body as {
         user?: {
           id?: string
           email?: string
-          phone?: string
-          app_metadata?: Record<string, unknown>
-          user_metadata?: Record<string, unknown>
           created_at?: string
         }
         email_data?: {
-          token?: string
-          token_hash?: string
+          token?: string          // raw OTP (older field)
+          token_hash?: string     // hashed OTP (preferred)
           token_new?: string
           token_hash_new?: string
           redirect_to?: string
-          email_action_type?: string  // Supabase's actual field name
-          verification_type?: string  // legacy alias (may not be present)
+          email_action_type?: string   // e.g. "signup", "recovery", "invite"
+          verification_type?: string   // alias used in some Supabase versions
           site_url?: string
         }
         metadata?: Record<string, unknown>
@@ -130,131 +101,78 @@ export default async function authRoutes(app: FastifyInstance) {
       const userEmail = body?.user?.email
       const emailData = body?.email_data
 
-      // Log a sanitized view of the full payload so we can see what Supabase sends.
-      console.log('[EMAIL_HOOK] Payload (sanitized):', {
-        user: {
-          id: body?.user?.id,
-          email: userEmail
-            ? userEmail.replace(/^(.{3}).*(@.*)$/, '$1…$2')
-            : undefined,
-          created_at: body?.user?.created_at,
-        },
-        email_data: {
-          email_action_type: emailData?.email_action_type,
-          verification_type: emailData?.verification_type,
-          token_hash: emailData?.token_hash
-            ? emailData.token_hash.slice(0, 8) + '…(masked)'
-            : undefined,
-          token: emailData?.token
-            ? emailData.token.slice(0, 8) + '…(masked)'
-            : undefined,
-          redirect_to: emailData?.redirect_to,
-          site_url: emailData?.site_url,
-          token_hash_new: emailData?.token_hash_new ? '(present)' : undefined,
-        },
-        metadata: body?.metadata,
-      })
-
-      // email_action_type is the documented field; fall back to verification_type
-      // in case older Supabase versions use that name.
+      // email_action_type is the canonical field; fall back to verification_type.
       const actionType = emailData?.email_action_type ?? emailData?.verification_type
-      // token_hash is preferred; token is an older alias Supabase may also send
+      // token_hash is preferred; fall back to token (raw OTP, older field).
       const tokenHash = emailData?.token_hash ?? emailData?.token
 
+      // Log sanitized payload so we can see exactly what Supabase sends.
+      console.log('[EMAIL_HOOK] payload:', {
+        userId: body?.user?.id,
+        email: userEmail ? userEmail.replace(/^(.{3}).*(@.*)$/, '$1…$2') : '(missing)',
+        email_action_type: emailData?.email_action_type,
+        verification_type: emailData?.verification_type,
+        resolvedActionType: actionType,
+        token_hash: tokenHash ? tokenHash.slice(0, 8) + '…(masked)' : '(missing)',
+        redirect_to: emailData?.redirect_to,
+        site_url: emailData?.site_url,
+        token_hash_new: emailData?.token_hash_new ? '(present)' : undefined,
+        metadata: body?.metadata,
+        // all keys present in email_data — reveals unexpected field names
+        emailDataKeys: Object.keys(emailData ?? {}),
+      })
+
       if (!userEmail || !tokenHash || !actionType) {
-        console.log('[EMAIL_HOOK] ❌ Unexpected payload shape — missing required fields', {
+        console.error('[EMAIL_HOOK] ❌ missing required fields — cannot send email', {
           hasEmail: !!userEmail,
           hasTokenHash: !!tokenHash,
           hasActionType: !!actionType,
+          bodyTopLevelKeys: Object.keys(body ?? {}),
           emailDataKeys: Object.keys(emailData ?? {}),
-          userKeys: Object.keys(body?.user ?? {}),
         })
+        // Return 200 so Supabase does not fall back to its internal sender.
         return reply.code(200).send({})
       }
 
+      // ── Build Supabase verification URL ────────────────────────────────
       const verifyUrl = new URL(`${env.SUPABASE_URL}/auth/v1/verify`)
       verifyUrl.searchParams.set('token_hash', tokenHash)
       verifyUrl.searchParams.set('type', actionType)
-      verifyUrl.searchParams.set('redirect_to', emailData?.redirect_to || emailData?.site_url || env.FRONTEND_URL)
+      verifyUrl.searchParams.set(
+        'redirect_to',
+        emailData?.redirect_to ?? emailData?.site_url ?? env.FRONTEND_URL,
+      )
 
       const type = actionType as VerificationType
       const { subject, html } = emailContent(type, verifyUrl.toString())
 
-      console.log('📨 RESEND SENDING', { to: userEmail, subject, type })
-
-      const { error } = await resend.emails.send({ from: env.RESEND_FROM, to: [userEmail], subject, html })
-      if (error) {
-        console.log('[EMAIL_HOOK] ❌ Resend failed:', error)
-      } else {
-        console.log('[EMAIL_HOOK] ✅ Resend succeeded:', { to: userEmail, type })
-      }
-
-    } catch (err) {
-      // Never let an exception cause a non-200 response — that would make
-      // Supabase fall back to its internal email sender and trigger rate limits.
-      console.log('[EMAIL_HOOK] ❌ Unexpected exception (returning 200 anyway):', err)
-    }
-
-    // Always 200 — non-2xx blocks the auth operation entirely in Supabase
-    return reply.code(200).send({})
-  })
-
-  // ── Manual resend verification ──────────────────────────────────────────
-  // Called by the frontend "Resend email" button. Generates a fresh
-  // Supabase signup link via admin API, then sends it via Resend.
-  // 60s per-email cooldown prevents abuse.
-  app.post<{ Body: { email: string } }>(
-    '/auth/send-verification',
-    {
-      schema: {
-        body: {
-          type: 'object',
-          required: ['email'],
-          properties: { email: { type: 'string', format: 'email' } },
-        },
-      },
-    },
-    async (req, reply) => {
-      const { email } = req.body
-
-      const lastSent = resendCooldowns.get(email) ?? 0
-      const elapsed = Date.now() - lastSent
-      if (elapsed < RESEND_COOLDOWN_MS) {
-        const retryAfter = Math.ceil((RESEND_COOLDOWN_MS - elapsed) / 1000)
-        return reply.code(429).send({ error: 'Please wait before requesting another email.', retryAfter })
-      }
-
-      // 'magiclink' doesn't require the user's password and verifies their
-      // email when clicked — correct for resending to an unconfirmed user.
-      const { data, error: linkError } = await db.auth.admin.generateLink({
-        type: 'magiclink',
-        email,
-        options: { redirectTo: env.FRONTEND_URL },
+      console.log('[EMAIL_HOOK] sending via Resend', {
+        to: userEmail.replace(/^(.{3}).*(@.*)$/, '$1…$2'),
+        subject,
+        type,
+        verifyUrlHost: verifyUrl.host,
       })
 
-      if (linkError || !data?.properties?.action_link) {
-        req.log.error({ linkError, email }, 'send-verification: generateLink failed')
-        return reply.code(500).send({ error: 'Could not generate verification link. The address may already be confirmed.' })
-      }
-
-      // Record cooldown before sending so a Resend failure doesn't let the
-      // user retry immediately with a freshly-generated (now-invalidated) token
-      resendCooldowns.set(email, Date.now())
-
-      const { subject, html } = emailContent('signup', data.properties.action_link)
-      const { error: sendError } = await resend.emails.send({
+      // ── Send via Resend ─────────────────────────────────────────────────
+      const { data: sendData, error: sendError } = await resend.emails.send({
         from: env.RESEND_FROM,
-        to: [email],
+        to: [userEmail],
         subject,
         html,
       })
 
       if (sendError) {
-        req.log.error({ sendError, email }, 'send-verification: Resend send failed')
-        return reply.code(500).send({ error: 'Failed to send email. Please try again later.' })
+        console.error('[EMAIL_HOOK] ❌ Resend error:', sendError)
+      } else {
+        console.log('[EMAIL_HOOK] ✅ Resend succeeded', { id: sendData?.id, type })
       }
 
-      return { ok: true }
-    },
-  )
+    } catch (err) {
+      // Catch-all: never let an exception produce a non-200 response.
+      console.error('[EMAIL_HOOK] ❌ unexpected exception (returning 200):', err)
+    }
+
+    // Supabase expects a 200 with an empty body on success.
+    return reply.code(200).send({})
+  })
 }

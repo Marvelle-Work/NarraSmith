@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { useAuth } from './AuthProvider'
-import { API_BASE } from '../api/client'
+import { supabase } from '../lib/supabase'
 
 type Props = {
   onSwitchToLogin: () => void
@@ -45,20 +45,15 @@ export function SignupPage({ onSwitchToLogin }: Props) {
     setResendState('sending')
     setResendError(null)
     try {
-      const res = await fetch(`${API_BASE}/auth/send-verification`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ email }),
+      // Calls Supabase directly, which re-triggers the Send Email hook → Resend.
+      // This keeps the canonical path: Supabase → hook → Railway → Resend → inbox.
+      const { error } = await supabase.auth.resend({
+        type: 'signup',
+        email,
+        options: { emailRedirectTo: window.location.origin },
       })
-      if (res.status === 429) {
-        const body = await res.json() as { retryAfter?: number }
-        setResendCooldown(body.retryAfter ?? 60)
-        setResendState('idle')
-        return
-      }
-      if (!res.ok) {
-        const body = await res.json().catch(() => ({})) as { error?: string }
-        setResendError(body.error ?? 'Failed to resend. Please try again.')
+      if (error) {
+        setResendError(error.message)
         setResendState('error')
         return
       }
